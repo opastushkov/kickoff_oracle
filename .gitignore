@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# Build output
+frontend/dist/
+
+# SECRETS — self-custodial wallet seed phrase. Never commit.
+frontend/sidecar/.wallet.json
+
+# Local P2P room state (op logs persisted by the sidecar)
+frontend/sidecar/.rooms/
+
+# Logs & OS noise
+*.log
+.DS_Store
+Thumbs.db
+
+# Local assistant/tooling config
+.claude/
+
+# Documentation excluded from the repo for now (by request)
+doc/
