@@ -1,0 +1,19 @@
+{
+  "name": "@kickoff/qvac-sidecar",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Local QVAC bridge: runs LLM inference on-device and exposes it to the Kickoff Oracle app on localhost. No cloud AI.",
+  "scripts": {
+    "start": "node server.mjs",
+    "smoke": "node smoke.mjs"
+  },
+  "dependencies": {
+    "@qvac/sdk": "^0.14.1",
+    "@tetherto/wdk": "^1.0.0-beta.13",
+    "@tetherto/wdk-wallet-evm": "^1.0.0-beta.15",
+    "bare-runtime-win32-x64": "^1.29.5",
+    "hyperswarm": "^4.17.0",
+    "ws": "^8.21.0"
+  }
+}
