@@ -48,19 +48,23 @@ export class QvacOracleRuntime implements OracleRuntime {
     public readonly modelLabel: string,
   ) {}
 
-  private async complete(messages: { role: string; content: string }[], timeoutMs = 240_000): Promise<string> {
+  private async complete(
+    messages: { role: string; content: string }[],
+    model?: string,
+    timeoutMs = 240_000,
+  ): Promise<{ text: string; model: string }> {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), timeoutMs);
     try {
       const res = await fetch(`${this.baseUrl}/complete`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages }),
+        body: JSON.stringify({ messages, model }),
         signal: ctrl.signal,
       });
       if (!res.ok) throw new Error(`sidecar ${res.status}: ${await res.text()}`);
       const j = await res.json();
-      return String(j.text ?? "");
+      return { text: String(j.text ?? ""), model: String(j.model ?? model ?? this.modelLabel) };
     } finally {
       clearTimeout(t);
     }
@@ -83,16 +87,16 @@ export class QvacOracleRuntime implements OracleRuntime {
 
     // One retry on malformed output, then INSUFFICIENT_EVIDENCE (doc §7.2).
     for (let attempt = 0; attempt < 2; attempt++) {
-      const raw = await this.complete(messages);
-      const parsed = parseVerdict(raw);
-      if (parsed) return { ...parsed, rawOutput: raw, model: this.modelLabel };
+      const out = await this.complete(messages, req.model);
+      const parsed = parseVerdict(out.text);
+      if (parsed) return { ...parsed, rawOutput: out.text, model: out.model };
     }
     return {
       verdict: "INSUFFICIENT_EVIDENCE",
       confidence: 0,
       reason: "The oracle's output could not be parsed as a valid verdict.",
       rawOutput: "parse-failure",
-      model: this.modelLabel,
+      model: req.model,
     };
   }
 
@@ -101,7 +105,7 @@ export class QvacOracleRuntime implements OracleRuntime {
       const votes = verdicts
         .map((v) => `${v.oracle}: ${v.verdict} (${v.confidence}%) — ${v.reason}`)
         .join("\n");
-      const text = await this.complete(
+      const out = await this.complete(
         [
           {
             role: "system",
@@ -117,13 +121,49 @@ export class QvacOracleRuntime implements OracleRuntime {
               `Evidence:\n${bundleText(market.bundle?.items ?? [])}\n\nOracle votes:\n${votes}`,
           },
         ],
+        verdicts[0]?.model, // explain with a model that is already loaded
         120_000,
       );
-      const clean = text.trim();
+      const clean = out.text.trim();
       return clean.length > 0 ? clean.slice(0, 600) : await this.fallback.explain(market, resolution, verdicts);
     } catch {
       return this.fallback.explain(market, resolution, verdicts);
     }
+  }
+}
+
+// ─── Model catalog client (room setup: pick + download models) ──────────────
+
+export interface QvacModelInfo {
+  name: string;
+  sizeMB: number;
+  loaded: boolean;
+  /** Download progress 0–100 while downloading, null otherwise. */
+  downloading: number | null;
+}
+
+export async function listQvacModels(baseUrl = "http://127.0.0.1:8791"): Promise<QvacModelInfo[] | null> {
+  try {
+    const res = await fetch(`${baseUrl}/models`, { signal: AbortSignal.timeout(3000) });
+    if (!res.ok) return null;
+    const j = await res.json();
+    return j?.ok ? (j.models as QvacModelInfo[]) : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function requestQvacModel(name: string, baseUrl = "http://127.0.0.1:8791"): Promise<boolean> {
+  try {
+    const res = await fetch(`${baseUrl}/models/load`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+      signal: AbortSignal.timeout(5000),
+    });
+    return res.ok;
+  } catch {
+    return false;
   }
 }
 

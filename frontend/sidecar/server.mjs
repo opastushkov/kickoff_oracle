@@ -14,42 +14,83 @@ import * as sdk from "@qvac/sdk";
 import { initRooms } from "./rooms.mjs";
 
 const PORT = Number(process.env.QVAC_SIDECAR_PORT ?? 8791);
-const MODEL_LABEL = "Llama 3.2 1B";
+const DEFAULT_MODEL = "Llama 3.2 1B";
 
-let modelId = null;
-let loading = null;
+// Catalog of models the room creator can pick from. Downloads happen on
+// demand through the QVAC registry (P2P, Hyperdrive-backed).
+const CATALOG = {
+  "Llama 3.2 1B": { constant: "LLAMA_3_2_1B_INST_Q4_0", sizeMB: 770 },
+  "Qwen3 1.7B": { constant: "QWEN3_1_7B_INST_Q4", sizeMB: 1100 },
+  "Qwen3 0.6B": { constant: "QWEN3_600M_INST_Q4", sizeMB: 480 },
+  "SmolLM2 360M": { constant: "SMOLLM2_360M_INST_Q8", sizeMB: 390 },
+};
 
-async function ensureModel() {
-  if (modelId) return modelId;
-  loading ??= (async () => {
+// name → { modelId, loading: Promise|null, progress: number|null }
+const models = new Map(Object.keys(CATALOG).map((n) => [n, { modelId: null, loading: null, progress: null }]));
+
+function ensureModelByName(name) {
+  const entry = models.get(name);
+  const spec = CATALOG[name];
+  if (!entry || !spec || !sdk[spec.constant]) {
+    return Promise.reject(new Error(`unknown model "${name}"`));
+  }
+  if (entry.modelId) return Promise.resolve(entry.modelId);
+  entry.loading ??= (async () => {
     let lastPct = -1;
-    console.log("[sidecar] loading model…");
-    modelId = await sdk.loadModel({
-      modelSrc: sdk.LLAMA_3_2_1B_INST_Q4_0,
-      modelType: "llm",
-      onProgress: (p) => {
-        const raw = typeof p === "number" ? p : p?.progress ?? p?.percent ?? NaN;
-        const pct = Math.round(raw <= 1 ? raw * 100 : raw);
-        if (Number.isFinite(pct) && pct !== lastPct && pct % 10 === 0) {
-          lastPct = pct;
-          console.log(`[sidecar] model load: ${pct}%`);
-        }
-      },
-    });
-    console.log("[sidecar] model ready");
-    return modelId;
+    console.log(`[sidecar] loading model "${name}"…`);
+    entry.progress = 0;
+    try {
+      entry.modelId = await sdk.loadModel({
+        modelSrc: sdk[spec.constant],
+        modelType: "llm",
+        onProgress: (p) => {
+          const raw = typeof p === "number" ? p : p?.percentage ?? p?.progress ?? p?.percent ?? NaN;
+          const pct = Math.round(raw <= 1 && raw > 0 ? raw * 100 : raw);
+          if (Number.isFinite(pct)) {
+            entry.progress = pct;
+            if (pct !== lastPct && pct % 10 === 0) {
+              lastPct = pct;
+              console.log(`[sidecar] "${name}" load: ${pct}%`);
+            }
+          }
+        },
+      });
+      entry.progress = 100;
+      console.log(`[sidecar] model "${name}" ready`);
+      return entry.modelId;
+    } catch (err) {
+      entry.loading = null;
+      entry.progress = null;
+      throw err;
+    }
   })();
-  return loading;
+  return entry.loading;
 }
 
-async function complete(messages) {
-  const id = await ensureModel();
+function modelStates() {
+  return Object.entries(CATALOG).map(([name, spec]) => {
+    const e = models.get(name);
+    return {
+      name,
+      sizeMB: spec.sizeMB,
+      loaded: e.modelId != null,
+      downloading: e.modelId == null && e.loading != null ? (e.progress ?? 0) : null,
+    };
+  });
+}
+
+async function complete(messages, modelName = DEFAULT_MODEL) {
+  const name = CATALOG[modelName] ? modelName : DEFAULT_MODEL;
+  const id = await ensureModelByName(name);
   const t0 = Date.now();
   const result = sdk.completion({ modelId: id, history: messages, stream: true });
   let text = "";
   for await (const token of result.tokenStream) text += token;
-  return { text, model: MODEL_LABEL, ms: Date.now() - t0 };
+  return { text, model: name, ms: Date.now() - t0 };
 }
+
+// Back-compat alias used at startup warm-up.
+const ensureModel = () => ensureModelByName(DEFAULT_MODEL);
 
 function cors(res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -79,8 +120,36 @@ const server = createServer(async (req, res) => {
   }
 
   if (req.method === "GET" && req.url === "/health") {
+    const def = models.get(DEFAULT_MODEL);
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ ok: true, engine: "qvac", loaded: modelId != null, model: MODEL_LABEL }));
+    res.end(JSON.stringify({ ok: true, engine: "qvac", loaded: def.modelId != null, model: DEFAULT_MODEL }));
+    return;
+  }
+
+  if (req.method === "GET" && req.url === "/models") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true, models: modelStates() }));
+    return;
+  }
+
+  if (req.method === "POST" && req.url === "/models/load") {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      try {
+        const { name } = JSON.parse(body);
+        if (!CATALOG[name]) throw new Error(`unknown model "${name}"`);
+        // Fire and forget — progress is polled via GET /models.
+        ensureModelByName(name).catch((err) =>
+          console.error(`[sidecar] load "${name}" failed:`, err?.message ?? err),
+        );
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true, models: modelStates() }));
+      } catch (err) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: false, error: String(err?.message ?? err) }));
+      }
+    });
     return;
   }
 
@@ -89,10 +158,10 @@ const server = createServer(async (req, res) => {
     req.on("data", (c) => (body += c));
     req.on("end", async () => {
       try {
-        const { messages } = JSON.parse(body);
+        const { messages, model } = JSON.parse(body);
         if (!Array.isArray(messages) || messages.length === 0) throw new Error("messages[] required");
-        const out = await complete(messages);
-        console.log(`[sidecar] completion ${out.ms}ms, ${out.text.length} chars`);
+        const out = await complete(messages, model);
+        console.log(`[sidecar] completion via "${out.model}" ${out.ms}ms, ${out.text.length} chars`);
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify(out));
       } catch (err) {

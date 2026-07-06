@@ -28,7 +28,12 @@ import { KickoffEngine, formatUSDt, shortHash, stakeTotal } from "../engine/engi
 import { asParticipant, loadOrCreateIdentity, shortWallet, type LocalIdentity } from "../engine/identity";
 import { MockOracleRuntime } from "../engine/oracles";
 import { BroadcastChannelAdapter, WebSocketAdapter, type P2PAdapter } from "../engine/p2p";
-import { detectQvacRuntime } from "../engine/qvac";
+import {
+  detectQvacRuntime,
+  listQvacModels,
+  requestQvacModel,
+  type QvacModelInfo,
+} from "../engine/qvac";
 import { detectWdkWallet } from "../engine/wdk";
 import { saveWdkIdentity } from "../engine/identity";
 import type {
@@ -376,6 +381,7 @@ function OracleCard({
   reason,
   state,
   delay,
+  model,
 }: {
   name: string;
   icon: React.ElementType;
@@ -384,6 +390,7 @@ function OracleCard({
   reason: string;
   state: OracleState;
   delay: number;
+  model?: string;
 }) {
   const verdictColor = verdict === "YES" ? C.green : verdict === "NO" ? C.red : C.amber;
   const verdictLabel = verdict === "YES" ? "YES" : verdict === "NO" ? "NO" : "INSUFFICIENT";
@@ -409,7 +416,14 @@ function OracleCard({
           <Icon size={15} style={{ color: state === "revealed" ? verdictColor : C.muted }} />
         </div>
         <div>
-          <div className="text-base font-semibold" style={{ ...fontBody, color: C.chalk }}>{name}</div>
+          <div className="text-base font-semibold" style={{ ...fontBody, color: C.chalk }}>
+            {name}
+            {model && (
+              <span className="ml-2 text-xs font-normal" style={{ ...fontMono, color: C.muted }}>
+                {model}
+              </span>
+            )}
+          </div>
           {state === "idle" && <div className="text-sm" style={{ ...fontBody, color: C.muted }}>Waiting</div>}
           {state === "analyzing" && (
             <div className="text-sm flex items-center gap-1" style={{ ...fontBody, color: C.amber }}>
@@ -1307,6 +1321,7 @@ function MarketScreen({
                       reason={verdict?.reason ?? ""}
                       state={state}
                       delay={i * 0.15}
+                      model={verdict?.model ?? cfg.model}
                     />
                   );
                 })}
@@ -1647,8 +1662,10 @@ function SettlementScreen({
 }
 
 // ─── Modals ───────────────────────────────────────────────────────────────────
-// Models the sidecar can actually serve today; extend as more are hosted.
-const QVAC_MODELS = ["Llama 3.2 1B"];
+// Static fallback when the sidecar (and its model catalog) is unreachable.
+const FALLBACK_MODELS: QvacModelInfo[] = [
+  { name: "Llama 3.2 1B", sizeMB: 770, loaded: false, downloading: null },
+];
 
 const inputClass = "w-full px-3 py-2 rounded-lg text-sm outline-none";
 const inputStyle = { ...fontBody, background: C.bg, border: `1px solid ${C.hairline}`, color: C.chalk };
@@ -1706,11 +1723,34 @@ function CreateRoomModal({
   const [model, setModel] = useState("Llama 3.2 1B");
   const [threshold, setThreshold] = useState(2);
   const [fallbackKind, setFallbackKind] = useState<"FACTS" | "TIEBREAKER_LLM">("TIEBREAKER_LLM");
-  const [fallbackModel, setFallbackModel] = useState("Llama 3.2 1B");
+  const [models, setModels] = useState<QvacModelInfo[] | null>(null);
+
+  // Poll the sidecar's model catalog while the modal is open so download
+  // progress updates live (UC-01: pick + download the oracle model).
+  useEffect(() => {
+    let stop = false;
+    const tick = async () => {
+      const list = await listQvacModels();
+      if (!stop) setModels(list);
+    };
+    void tick();
+    const timer = setInterval(tick, 2000);
+    return () => {
+      stop = true;
+      clearInterval(timer);
+    };
+  }, []);
+
+  const catalog = models ?? FALLBACK_MODELS;
+  const sidecarOnline = models != null;
+  const selected = catalog.find((m) => m.name === model) ?? catalog[0];
 
   const MAX_ORACLES = 5;
   const effThreshold = Math.min(Math.max(threshold, 1), count);
-  const valid = name.trim().length > 0;
+  // Without a sidecar the mock runtime serves any name; with one, the chosen
+  // model must be downloaded before the room can be created.
+  const modelReady = !sidecarOnline || (selected?.loaded ?? false);
+  const valid = name.trim().length > 0 && modelReady;
 
   const submit = () => {
     if (!valid) return;
@@ -1721,7 +1761,7 @@ function CreateRoomModal({
         committee: Array.from({ length: count }, (_, i) => ({ id: `oracle-${i + 1}`, model })),
         threshold: effThreshold,
         fallback:
-          fallbackKind === "FACTS" ? { kind: "FACTS" } : { kind: "TIEBREAKER_LLM", model: fallbackModel },
+          fallbackKind === "FACTS" ? { kind: "FACTS" } : { kind: "TIEBREAKER_LLM", model },
       },
     });
   };
@@ -1792,21 +1832,69 @@ function CreateRoomModal({
               </button>
             </div>
           </div>
-          <div className="flex-1">
-            <FieldLabel>Oracle model</FieldLabel>
-            <select
-              className={inputClass}
-              style={inputStyle}
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-            >
-              {QVAC_MODELS.map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
-              ))}
-            </select>
+        </div>
+
+        <div>
+          <FieldLabel>Oracle model {sidecarOnline ? "(local, via QVAC)" : "(oracle node offline — mock verdicts)"}</FieldLabel>
+          <div className="flex flex-col gap-1.5">
+            {catalog.map((m) => {
+              const isSelected = m.name === model;
+              return (
+                <div
+                  key={m.name}
+                  onClick={() => setModel(m.name)}
+                  className="flex items-center gap-3 px-3 py-2 rounded-lg border cursor-pointer transition-all"
+                  style={{
+                    borderColor: isSelected ? C.green : C.hairline,
+                    background: isSelected ? "rgba(30,122,70,0.06)" : C.bg,
+                  }}
+                >
+                  <span className="text-sm font-medium flex-1" style={{ ...fontBody, color: C.chalk }}>
+                    {m.name}
+                    <span className="ml-2 text-xs" style={{ ...fontBody, color: C.muted }}>
+                      ~{m.sizeMB} MB
+                    </span>
+                  </span>
+                  {!sidecarOnline ? null : m.loaded ? (
+                    <span className="text-xs font-semibold" style={{ ...fontBody, color: C.green }}>
+                      ✓ Downloaded
+                    </span>
+                  ) : m.downloading != null ? (
+                    <span className="flex items-center gap-2">
+                      <span className="w-24 h-1.5 rounded-full overflow-hidden" style={{ background: C.panel2 }}>
+                        <span
+                          className="block h-1.5 rounded-full transition-all"
+                          style={{ width: `${m.downloading}%`, background: C.green }}
+                        />
+                      </span>
+                      <span className="text-xs" style={{ ...fontMono, color: C.muted }}>
+                        {m.downloading}%
+                      </span>
+                    </span>
+                  ) : (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setModel(m.name);
+                        void requestQvacModel(m.name);
+                      }}
+                      className="px-3 py-1 rounded text-xs font-semibold transition-all hover:opacity-90"
+                      style={{ ...fontBody, background: C.teal, color: "#fff" }}
+                    >
+                      Download
+                    </button>
+                  )}
+                </div>
+              );
+            })}
           </div>
+          {sidecarOnline && selected && !selected.loaded && (
+            <p className="text-xs mt-1.5" style={{ ...fontBody, color: C.amber }}>
+              {selected.downloading != null
+                ? "Downloading — the room can be created once the model is ready."
+                : "This model isn't on your machine yet — click Download to fetch it."}
+            </p>
+          )}
         </div>
 
         <div>
@@ -1828,18 +1916,9 @@ function CreateRoomModal({
               </button>
             ))}
             {fallbackKind === "TIEBREAKER_LLM" && (
-              <select
-                className="px-2 py-2 rounded-lg text-sm"
-                style={inputStyle}
-                value={fallbackModel}
-                onChange={(e) => setFallbackModel(e.target.value)}
-              >
-                {QVAC_MODELS.map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
-              </select>
+              <span className="text-xs" style={{ ...fontBody, color: C.muted }}>
+                uses the committee's model ({model})
+              </span>
             )}
           </div>
           <p className="text-xs" style={{ ...fontBody, color: C.muted }}>
@@ -2199,7 +2278,7 @@ export default function App() {
     const key = `room_${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
     const engine = new KickoffEngine({
       runtime: qvac ?? new MockOracleRuntime(1200),
-      runtimeLabel: qvac ? `Runs locally via QVAC · ${qvac.modelLabel} — no cloud` : undefined,
+      runtimeLabel: qvac ? "Runs locally via QVAC — models chosen per room · no cloud" : undefined,
       adapter: makeAdapter(key, qvac != null),
     });
     engine.adoptIdentity(asParticipant(identity));
@@ -2244,7 +2323,7 @@ export default function App() {
     if (!sidecarUp) setSidecarUp(true);
     const engine = new KickoffEngine({
       runtime: qvac,
-      runtimeLabel: `Runs locally via QVAC · ${qvac.modelLabel} — no cloud`,
+      runtimeLabel: "Runs locally via QVAC — models chosen per room · no cloud",
       adapter: makeAdapter(key, true),
     });
     const guest = asParticipant(identity);
