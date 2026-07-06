@@ -2241,11 +2241,14 @@ export default function App() {
 
     // Unknown key → join over P2P: connect to the swarm topic via the sidecar
     // and wait for the room's op log to arrive from its peers (UC-02).
-    if (!sidecarUp) return false;
+    // Detect the sidecar NOW rather than trusting page-load state — it may
+    // have been started after the page loaded.
     const qvac = await detectQvacRuntime();
+    if (!qvac) return false; // no sidecar → no cross-machine transport
+    if (!sidecarUp) setSidecarUp(true);
     const engine = new KickoffEngine({
-      runtime: qvac ?? new MockOracleRuntime(1200),
-      runtimeLabel: qvac ? `Runs locally via QVAC · ${qvac.modelLabel} — no cloud` : undefined,
+      runtime: qvac,
+      runtimeLabel: `Runs locally via QVAC · ${qvac.modelLabel} — no cloud`,
       adapter: makeAdapter(key, true),
     });
     const guest = asParticipant(identity);
