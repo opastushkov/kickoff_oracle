@@ -1710,6 +1710,86 @@ function FieldLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
+function ModelStatusBadge({
+  info,
+  online,
+  onDownload,
+}: {
+  info?: QvacModelInfo;
+  online: boolean;
+  onDownload: () => void;
+}) {
+  if (!online || !info) return null;
+  if (info.loaded) {
+    return (
+      <span className="text-xs font-semibold shrink-0" style={{ ...fontBody, color: C.green }}>
+        ✓ Downloaded
+      </span>
+    );
+  }
+  if (info.downloading != null) {
+    return (
+      <span className="flex items-center gap-2 shrink-0">
+        <span className="w-20 h-1.5 rounded-full overflow-hidden" style={{ background: C.panel2 }}>
+          <span
+            className="block h-1.5 rounded-full transition-all"
+            style={{ width: `${info.downloading}%`, background: C.green }}
+          />
+        </span>
+        <span className="text-xs" style={{ ...fontMono, color: C.muted }}>
+          {info.downloading}%
+        </span>
+      </span>
+    );
+  }
+  return (
+    <button
+      onClick={onDownload}
+      className="px-3 py-1 rounded text-xs font-semibold shrink-0 transition-all hover:opacity-90"
+      style={{ ...fontBody, background: C.teal, color: "#fff" }}
+    >
+      Download
+    </button>
+  );
+}
+
+/** One oracle slot: pick a model; download it inline if it's not local yet. */
+function ModelSlotRow({
+  label,
+  value,
+  onChange,
+  catalog,
+  online,
+}: {
+  label: string;
+  value: string;
+  onChange: (model: string) => void;
+  catalog: QvacModelInfo[];
+  online: boolean;
+}) {
+  const info = catalog.find((m) => m.name === value);
+  return (
+    <div className="flex items-center gap-3">
+      <span className="w-24 text-sm shrink-0" style={{ ...fontBody, color: C.chalk }}>
+        {label}
+      </span>
+      <select
+        className="flex-1 px-2 py-1.5 rounded-lg text-sm"
+        style={inputStyle}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        {catalog.map((m) => (
+          <option key={m.name} value={m.name}>
+            {m.name} (~{m.sizeMB} MB)
+          </option>
+        ))}
+      </select>
+      <ModelStatusBadge info={info} online={online} onDownload={() => void requestQvacModel(value)} />
+    </div>
+  );
+}
+
 /** UC-01: room creation with the room-level resolution policy. */
 function CreateRoomModal({
   onClose,
@@ -1720,7 +1800,8 @@ function CreateRoomModal({
 }) {
   const [name, setName] = useState("My Watch Party");
   const [count, setCount] = useState(3);
-  const [model, setModel] = useState("Llama 3.2 1B");
+  const [slotModels, setSlotModels] = useState<string[]>(() => Array(3).fill("Llama 3.2 1B"));
+  const [tiebreakerModel, setTiebreakerModel] = useState("Llama 3.2 1B");
   const [threshold, setThreshold] = useState(2);
   const [fallbackKind, setFallbackKind] = useState<"FACTS" | "TIEBREAKER_LLM">("TIEBREAKER_LLM");
   const [models, setModels] = useState<QvacModelInfo[] | null>(null);
@@ -1743,13 +1824,19 @@ function CreateRoomModal({
 
   const catalog = models ?? FALLBACK_MODELS;
   const sidecarOnline = models != null;
-  const selected = catalog.find((m) => m.name === model) ?? catalog[0];
+  const infoOf = (n: string) => catalog.find((m) => m.name === n);
 
   const MAX_ORACLES = 5;
   const effThreshold = Math.min(Math.max(threshold, 1), count);
-  // Without a sidecar the mock runtime serves any name; with one, the chosen
-  // model must be downloaded before the room can be created.
-  const modelReady = !sidecarOnline || (selected?.loaded ?? false);
+  // Without a sidecar the mock runtime serves any name; with one, every model
+  // used by the committee (and the tiebreaker) must be downloaded first.
+  const neededModels = [
+    ...new Set([
+      ...slotModels.slice(0, count),
+      ...(fallbackKind === "TIEBREAKER_LLM" ? [tiebreakerModel] : []),
+    ]),
+  ];
+  const modelReady = !sidecarOnline || neededModels.every((n) => infoOf(n)?.loaded);
   const valid = name.trim().length > 0 && modelReady;
 
   const submit = () => {
@@ -1758,10 +1845,15 @@ function CreateRoomModal({
       name: name.trim(),
       matchContext: MATCH_FIXTURE.label,
       policy: {
-        committee: Array.from({ length: count }, (_, i) => ({ id: `oracle-${i + 1}`, model })),
+        committee: Array.from({ length: count }, (_, i) => ({
+          id: `oracle-${i + 1}`,
+          model: slotModels[i] ?? slotModels[0] ?? "Llama 3.2 1B",
+        })),
         threshold: effThreshold,
         fallback:
-          fallbackKind === "FACTS" ? { kind: "FACTS" } : { kind: "TIEBREAKER_LLM", model },
+          fallbackKind === "FACTS"
+            ? { kind: "FACTS" }
+            : { kind: "TIEBREAKER_LLM", model: tiebreakerModel },
       },
     });
   };
@@ -1802,7 +1894,15 @@ function CreateRoomModal({
                 {count}
               </span>
               <button
-                onClick={() => setCount((n) => Math.min(MAX_ORACLES, n + 1))}
+                onClick={() =>
+                  setCount((n) => {
+                    const next = Math.min(MAX_ORACLES, n + 1);
+                    setSlotModels((prev) =>
+                      prev.length < next ? [...prev, prev[prev.length - 1] ?? "Llama 3.2 1B"] : prev,
+                    );
+                    return next;
+                  })
+                }
                 className="w-8 h-8 rounded-lg border text-lg font-bold"
                 style={{ ...fontBody, color: C.chalk, borderColor: C.hairline }}
               >
@@ -1835,64 +1935,24 @@ function CreateRoomModal({
         </div>
 
         <div>
-          <FieldLabel>Oracle model {sidecarOnline ? "(local, via QVAC)" : "(oracle node offline — mock verdicts)"}</FieldLabel>
-          <div className="flex flex-col gap-1.5">
-            {catalog.map((m) => {
-              const isSelected = m.name === model;
-              return (
-                <div
-                  key={m.name}
-                  onClick={() => setModel(m.name)}
-                  className="flex items-center gap-3 px-3 py-2 rounded-lg border cursor-pointer transition-all"
-                  style={{
-                    borderColor: isSelected ? C.green : C.hairline,
-                    background: isSelected ? "rgba(30,122,70,0.06)" : C.bg,
-                  }}
-                >
-                  <span className="text-sm font-medium flex-1" style={{ ...fontBody, color: C.chalk }}>
-                    {m.name}
-                    <span className="ml-2 text-xs" style={{ ...fontBody, color: C.muted }}>
-                      ~{m.sizeMB} MB
-                    </span>
-                  </span>
-                  {!sidecarOnline ? null : m.loaded ? (
-                    <span className="text-xs font-semibold" style={{ ...fontBody, color: C.green }}>
-                      ✓ Downloaded
-                    </span>
-                  ) : m.downloading != null ? (
-                    <span className="flex items-center gap-2">
-                      <span className="w-24 h-1.5 rounded-full overflow-hidden" style={{ background: C.panel2 }}>
-                        <span
-                          className="block h-1.5 rounded-full transition-all"
-                          style={{ width: `${m.downloading}%`, background: C.green }}
-                        />
-                      </span>
-                      <span className="text-xs" style={{ ...fontMono, color: C.muted }}>
-                        {m.downloading}%
-                      </span>
-                    </span>
-                  ) : (
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setModel(m.name);
-                        void requestQvacModel(m.name);
-                      }}
-                      className="px-3 py-1 rounded text-xs font-semibold transition-all hover:opacity-90"
-                      style={{ ...fontBody, background: C.teal, color: "#fff" }}
-                    >
-                      Download
-                    </button>
-                  )}
-                </div>
-              );
-            })}
+          <FieldLabel>
+            Oracle models {sidecarOnline ? "(local, via QVAC)" : "(oracle node offline — mock verdicts)"}
+          </FieldLabel>
+          <div className="flex flex-col gap-2">
+            {Array.from({ length: count }, (_, i) => (
+              <ModelSlotRow
+                key={i}
+                label={`Oracle ${i + 1}`}
+                value={slotModels[i] ?? "Llama 3.2 1B"}
+                onChange={(v) => setSlotModels((prev) => prev.map((x, j) => (j === i ? v : x)))}
+                catalog={catalog}
+                online={sidecarOnline}
+              />
+            ))}
           </div>
-          {sidecarOnline && selected && !selected.loaded && (
+          {sidecarOnline && !modelReady && (
             <p className="text-xs mt-1.5" style={{ ...fontBody, color: C.amber }}>
-              {selected.downloading != null
-                ? "Downloading — the room can be created once the model is ready."
-                : "This model isn't on your machine yet — click Download to fetch it."}
+              Some selected models aren't on this machine yet — download them to create the room.
             </p>
           )}
         </div>
@@ -1915,12 +1975,18 @@ function CreateRoomModal({
                 {kind === "FACTS" ? "Facts" : "Tiebreaker LLM"}
               </button>
             ))}
-            {fallbackKind === "TIEBREAKER_LLM" && (
-              <span className="text-xs" style={{ ...fontBody, color: C.muted }}>
-                uses the committee's model ({model})
-              </span>
-            )}
           </div>
+          {fallbackKind === "TIEBREAKER_LLM" && (
+            <div className="mb-2">
+              <ModelSlotRow
+                label="Tiebreaker"
+                value={tiebreakerModel}
+                onChange={setTiebreakerModel}
+                catalog={catalog}
+                online={sidecarOnline}
+              />
+            </div>
+          )}
           <p className="text-xs" style={{ ...fontBody, color: C.muted }}>
             {fallbackKind === "FACTS"
               ? "Split committee → the question is re-checked against objective feed data only."
