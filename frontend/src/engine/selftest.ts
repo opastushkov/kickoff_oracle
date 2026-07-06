@@ -74,6 +74,16 @@ async function main() {
   const red = engine.getView().markets.find((m) => m.id === DEMO.redCardId)!;
   assert(red.status === "CANCELLED", "tiebreaker INSUFFICIENT_EVIDENCE cancels the market");
   assert(engine.getView().balances["tb1qmarco"] >= 800n, "cancelled stakes refunded");
+  await new Promise((r) => setTimeout(r, 20));
+  const redAfter = engine.getView().markets.find((m) => m.id === DEMO.redCardId)!;
+  assert((redAfter.refundTxs?.length ?? 0) === 2, "on-chain refund receipts attached after cancellation");
+
+  // ── stakes can carry their on-chain transfer reference ───────────────────
+  engine.placeStake(DEMO.goalId, "tb1qivan", "NO", 100n, "0xstake_selftest");
+  assert(
+    engine.getView().markets.find((m) => m.id === DEMO.goalId)!.stakes.some((st) => st.txRef === "0xstake_selftest"),
+    "stake carries its on-chain txRef",
+  );
 
   // ── no facts path: markets resolve only through oracles ──────────────────
   await engine.emitEvent({ minute: 75, type: "GOAL", team: "Spain", description: "Goal — Spain", source: "REPLAY" });

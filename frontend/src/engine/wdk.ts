@@ -8,6 +8,30 @@ export interface WdkWalletInfo {
 }
 
 /**
+ * Send one on-chain stake transfer (staker → host escrow wallet) via the
+ * local sidecar's WDK wallet. Throws with a human-readable message on failure
+ * (e.g. unfunded wallet) so the stake UI can surface it.
+ */
+export async function executeStakeTransfer(
+  to: string,
+  amount: bigint,
+  baseUrl = "http://127.0.0.1:8791",
+): Promise<string> {
+  const res = await fetch(`${baseUrl}/wallet/transfer`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ to, amountMinor: amount.toString() }),
+    signal: AbortSignal.timeout(90_000),
+  });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok || !j.ok) {
+    const raw = String(j.error ?? `transfer failed (${res.status})`);
+    throw new Error(raw.includes("insufficient funds") ? "insufficient Sepolia funds in your wallet" : raw);
+  }
+  return String(j.txHash);
+}
+
+/**
  * Execute settlement payouts as real Sepolia transactions via the sidecar's
  * WDK wallet (runner-as-paymaster). Non-0x recipients (local placeholder
  * identities) are skipped. Returns tx receipts, or null when nothing was sent.

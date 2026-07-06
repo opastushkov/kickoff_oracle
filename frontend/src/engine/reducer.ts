@@ -165,6 +165,12 @@ export function applyOp(s: RoomState, logged: LoggedOp): RoomState {
       return { ...next, balances };
     }
 
+    case "REFUND_TX": {
+      const m = s.markets.find((x) => x.id === op.marketId);
+      if (!m || m.status !== "CANCELLED" || m.refundTxs) return s;
+      return updMarket(s, op.marketId, (x) => ({ ...x, refundTxs: op.txs }));
+    }
+
     case "SETTLE_TX": {
       const m = s.markets.find((x) => x.id === op.marketId);
       if (!m || !m.settlement || m.settlement.txRefs) return s; // receipts attach once

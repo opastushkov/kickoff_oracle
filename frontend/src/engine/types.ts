@@ -77,6 +77,8 @@ export interface Stake {
   wallet: string;
   side: Side;
   amount: bigint;
+  /** Sepolia tx hash of the on-chain stake transfer (staker → host escrow). */
+  txRef?: string;
 }
 
 export interface OracleVerdict {
@@ -125,6 +127,8 @@ export interface Market {
   resolution?: Resolution;
   settlement?: Settlement;
   cancelReason?: string;
+  /** On-chain refund receipts after cancellation (host escrow → stakers). */
+  refundTxs?: { wallet: string; txHash: string }[];
 }
 
 // ─── Operation log (doc/backend-design.md §5) ────────────────────────────────
@@ -148,6 +152,7 @@ export type Op =
   | { type: "FALLBACK_RESULT"; marketId: string; resolution?: Resolution; cancelReason?: string }
   | { type: "SETTLE"; settlement: Settlement }
   | { type: "SETTLE_TX"; marketId: string; txs: { wallet: string; txHash: string }[] }
+  | { type: "REFUND_TX"; marketId: string; txs: { wallet: string; txHash: string }[] }
   | { type: "MARKET_CANCEL"; marketId: string; reason: string };
 
 export interface LoggedOp {

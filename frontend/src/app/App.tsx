@@ -34,7 +34,7 @@ import {
   requestQvacModel,
   type QvacModelInfo,
 } from "../engine/qvac";
-import { detectWdkWallet, executeOnChainSettlement } from "../engine/wdk";
+import { detectWdkWallet, executeOnChainSettlement, executeStakeTransfer } from "../engine/wdk";
 import { saveWdkIdentity } from "../engine/identity";
 import type {
   AuditEntry,
@@ -960,13 +960,15 @@ function StakeControls({
   onStake,
 }: {
   balance: bigint;
-  onStake: (side: Side, amount: bigint) => void;
+  onStake: (side: Side, amount: bigint) => Promise<string | null>;
 }) {
   const [side, setSide] = useState<Side>("YES");
   const [amount, setAmount] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
-  const submit = () => {
+  const submit = async () => {
+    if (busy) return;
     const whole = Math.floor(Number(amount));
     if (!Number.isFinite(whole) || whole <= 0) {
       setError("Enter a positive whole amount of test USDt.");
@@ -977,9 +979,15 @@ function StakeControls({
       setError(`Insufficient balance — you have ${formatUSDt(balance)} test USDt.`);
       return;
     }
-    onStake(side, minor);
-    setAmount("");
+    setBusy(true);
     setError(null);
+    const err = await onStake(side, minor);
+    setBusy(false);
+    if (err) {
+      setError(err);
+      return;
+    }
+    setAmount("");
   };
 
   return (
@@ -1016,10 +1024,11 @@ function StakeControls({
         />
         <button
           onClick={submit}
+          disabled={busy}
           className="px-5 py-2 rounded-lg text-sm font-semibold transition-all hover:opacity-90"
-          style={{ ...fontBody, background: C.teal, color: "#fff" }}
+          style={{ ...fontBody, background: busy ? C.panel2 : C.teal, color: busy ? C.muted : "#fff" }}
         >
-          Stake
+          {busy ? "Staking on-chain…" : "Stake"}
         </button>
         <span className="ml-auto text-xs" style={{ ...fontBody, color: C.muted }}>
           Balance: {formatUSDt(balance)} test USDt
@@ -1056,7 +1065,7 @@ function MarketScreen({
   onLockBundle: () => void;
   onRun: () => void;
   onRunFallback: () => void;
-  onStake: (side: Side, amount: bigint) => void;
+  onStake: (side: Side, amount: bigint) => Promise<string | null>;
 }) {
   const room = view.room!;
   const market = view.markets.find((m) => m.id === marketId);
@@ -1172,7 +1181,14 @@ function MarketScreen({
                   {market.stakes.filter((s) => s.side === "YES").map((s) => (
                     <div key={s.wallet} className="flex items-center justify-between text-sm">
                       <span style={{ ...fontBody, color: C.chalk }}>{nameOf(view, s.wallet)}</span>
-                      <span style={{ ...fontBody, color: C.green }}>{formatUSDt(s.amount)} test USDt</span>
+                      <span className="flex items-center gap-1.5" style={{ ...fontBody, color: C.green }}>
+                        {formatUSDt(s.amount)} test USDt
+                        {s.txRef && (
+                          <a href={`https://sepolia.etherscan.io/tx/${s.txRef}`} target="_blank" rel="noreferrer" className="text-xs underline" style={{ ...fontMono, color: C.teal }} title="on-chain stake">
+                            ↗
+                          </a>
+                        )}
+                      </span>
                     </div>
                   ))}
                 </div>
@@ -1183,7 +1199,14 @@ function MarketScreen({
                   {market.stakes.filter((s) => s.side === "NO").map((s) => (
                     <div key={s.wallet} className="flex items-center justify-between text-sm">
                       <span style={{ ...fontBody, color: C.chalk }}>{nameOf(view, s.wallet)}</span>
-                      <span style={{ ...fontBody, color: C.red }}>{formatUSDt(s.amount)} test USDt</span>
+                      <span className="flex items-center gap-1.5" style={{ ...fontBody, color: C.red }}>
+                        {formatUSDt(s.amount)} test USDt
+                        {s.txRef && (
+                          <a href={`https://sepolia.etherscan.io/tx/${s.txRef}`} target="_blank" rel="noreferrer" className="text-xs underline" style={{ ...fontMono, color: C.teal }} title="on-chain stake">
+                            ↗
+                          </a>
+                        )}
+                      </span>
                     </div>
                   ))}
                 </div>
@@ -1434,6 +1457,16 @@ function MarketScreen({
                   {market.cancelReason && (
                     <div className="text-xs" style={{ ...fontBody, color: C.muted }}>
                       {market.cancelReason}
+                    </div>
+                  )}
+                  {market.refundTxs && market.refundTxs.length > 0 && (
+                    <div className="text-xs mt-1.5 flex items-center gap-2" style={{ ...fontBody, color: C.muted }}>
+                      Refunds on-chain:
+                      {market.refundTxs.map((tx) => (
+                        <a key={tx.txHash} href={`https://sepolia.etherscan.io/tx/${tx.txHash}`} target="_blank" rel="noreferrer" className="underline" style={{ ...fontMono, color: C.teal }}>
+                          ↗
+                        </a>
+                      ))}
                     </div>
                   )}
                 </div>
@@ -2306,8 +2339,27 @@ export default function App() {
   const handleRunFallback = () => {
     void activeEngine?.runFallback(selectedMarketId);
   };
-  const handleStake = (side: Side, amount: bigint) => {
-    activeEngine?.placeStake(selectedMarketId, identity.wallet, side, amount);
+  const handleStake = async (side: Side, amount: bigint): Promise<string | null> => {
+    if (!activeEngine || !view?.room) return "No active room.";
+    const host = view.room.creator;
+    let txRef: string | undefined;
+    // Real chain interaction: the stake moves staker → host escrow on Sepolia
+    // whenever the full WDK path exists. The host's own stakes stay in their
+    // wallet (already at the escrow), so no self-transfer is made.
+    if (
+      sidecarUp &&
+      identity.source === "wdk" &&
+      host.startsWith("0x") &&
+      host.toLowerCase() !== identity.wallet.toLowerCase()
+    ) {
+      try {
+        txRef = await executeStakeTransfer(host, amount);
+      } catch (e) {
+        return `On-chain stake failed: ${(e as Error).message}`;
+      }
+    }
+    activeEngine.placeStake(selectedMarketId, identity.wallet, side, amount, txRef);
+    return null;
   };
   const handleCloseStaking = () => {
     activeEngine?.lockMarket(selectedMarketId);

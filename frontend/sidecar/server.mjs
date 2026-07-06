@@ -119,6 +119,26 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  if (req.method === "POST" && req.url === "/wallet/transfer") {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", async () => {
+      try {
+        const { to, amountMinor } = JSON.parse(body);
+        if (!to || !amountMinor) throw new Error("to and amountMinor required");
+        const { sendTransfer } = await import("./wallet.mjs");
+        const txHash = await sendTransfer(to, amountMinor);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true, txHash }));
+      } catch (err) {
+        console.error("[wallet] transfer error:", err?.message ?? err);
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: false, error: String(err?.message ?? err) }));
+      }
+    });
+    return;
+  }
+
   if (req.method === "POST" && req.url === "/wallet/settle") {
     let body = "";
     req.on("data", (c) => (body += c));

@@ -42,11 +42,15 @@ export interface EngineOptions {
    */
   deterministic?: boolean;
   /**
-   * Optional on-chain settlement executor (WDK): runs after SETTLE on the
-   * resolving peer; returned tx hashes attach to the settlement via SETTLE_TX.
-   * Fire-and-forget — settlement never blocks on the chain.
+   * Optional on-chain payout executor (WDK): runs after SETTLE (payouts) and
+   * after cancellations (refunds) on the resolving peer; returned tx hashes
+   * attach via SETTLE_TX / REFUND_TX. Fire-and-forget — the room ledger never
+   * blocks on the chain.
    */
-  onSettlement?: (settlement: Settlement) => Promise<{ wallet: string; txHash: string }[] | null>;
+  onSettlement?: (batch: {
+    marketId: string;
+    payouts: { wallet: string; amount: bigint }[];
+  }) => Promise<{ wallet: string; txHash: string }[] | null>;
 }
 
 interface LogEntry {
@@ -171,8 +175,8 @@ export class KickoffEngine {
     return id;
   }
 
-  placeStake(marketId: string, wallet: string, side: Side, amount: bigint): void {
-    this.append({ type: "STAKE_PLACE", stake: { marketId, wallet, side, amount } }, wallet);
+  placeStake(marketId: string, wallet: string, side: Side, amount: bigint, txRef?: string): void {
+    this.append({ type: "STAKE_PLACE", stake: { marketId, wallet, side, amount, txRef } }, wallet);
   }
 
   lockMarket(marketId: string): void {
@@ -180,7 +184,20 @@ export class KickoffEngine {
   }
 
   cancelMarket(marketId: string, reason: string): void {
+    const stakes = this.requireMarket(marketId).stakes;
     this.append({ type: "MARKET_CANCEL", marketId, reason });
+    this.refundOnChain(marketId, stakes);
+  }
+
+  /** On-chain refunds after cancellation (host escrow → stakers), best-effort. */
+  private refundOnChain(marketId: string, stakes: { wallet: string; amount: bigint }[]): void {
+    if (!this.onSettlement || stakes.length === 0) return;
+    const payouts = stakes.map((s) => ({ wallet: s.wallet, amount: s.amount }));
+    void this.onSettlement({ marketId, payouts })
+      .then((txs) => {
+        if (txs && txs.length > 0) this.append({ type: "REFUND_TX", marketId, txs });
+      })
+      .catch(() => {});
   }
 
   // ─── evidence (UC-05, UC-06) ───────────────────────────────────────────────
@@ -261,7 +278,9 @@ export class KickoffEngine {
     if (verdict && verdict.verdict !== "INSUFFICIENT_EVIDENCE") {
       await this.resolve(marketId, verdict.verdict, "TIEBREAKER", true);
     } else {
+      const stakes = this.requireMarket(marketId).stakes;
       this.append({ type: "FALLBACK_RESULT", marketId, cancelReason: "tiebreaker found the evidence insufficient" });
+      this.refundOnChain(marketId, stakes);
     }
   }
 
@@ -332,6 +351,12 @@ export class KickoffEngine {
     entries.push({ key: "Settlement mode", value: "TEST_USDT" });
     for (const tx of m.settlement?.txRefs ?? []) {
       entries.push({ key: `Sepolia tx → ${tx.wallet.slice(0, 8)}…`, value: tx.txHash });
+    }
+    for (const tx of m.refundTxs ?? []) {
+      entries.push({ key: `Refund tx → ${tx.wallet.slice(0, 8)}…`, value: tx.txHash });
+    }
+    for (const st of m.stakes) {
+      if (st.txRef) entries.push({ key: `Stake tx ← ${st.wallet.slice(0, 8)}…`, value: st.txRef });
     }
     if (m.resolution) {
       const minute = this.primaryMinuteOf(m);

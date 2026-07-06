@@ -48,26 +48,32 @@ async function initWallet() {
 // 10-USDt payout is 0.001 Sepolia ETH — small enough for faucet balances.
 const WEI_PER_MINOR = BigInt(process.env.WDK_WEI_PER_MINOR ?? "1000000000000");
 
-/**
- * Execute settlement payouts as real Sepolia transactions from this wallet
- * (runner-as-paymaster model). Returns per-recipient tx hashes; failures are
- * collected, not thrown — settlement must degrade gracefully when unfunded.
- */
-export async function sendSettlement(payouts) {
+/** Send one real Sepolia transfer from this wallet. Returns the tx hash. */
+export async function sendTransfer(to, amountMinor) {
   initPromise ??= initWallet();
   const w = await initPromise;
+  const value = BigInt(amountMinor) * WEI_PER_MINOR;
+  const result = await w.account.sendTransaction({ to, value });
+  const hash = result?.hash ?? result?.txHash ?? String(result);
+  console.log(`[wallet] tx → ${to} (${amountMinor} minor): ${hash}`);
+  return hash;
+}
+
+/**
+ * Execute a batch of payouts (settlements, refunds) as real Sepolia
+ * transactions. Failures are collected, not thrown — the room ledger must
+ * degrade gracefully when this wallet is unfunded.
+ */
+export async function sendSettlement(payouts) {
   const txs = [];
   const errors = [];
   for (const p of payouts) {
     try {
-      const value = BigInt(p.amountMinor) * WEI_PER_MINOR;
-      const result = await w.account.sendTransaction({ to: p.to, value });
-      const hash = result?.hash ?? result?.txHash ?? String(result);
-      console.log(`[wallet] settlement tx → ${p.to}: ${hash}`);
+      const hash = await sendTransfer(p.to, p.amountMinor);
       txs.push({ wallet: p.to, txHash: hash });
     } catch (err) {
       const msg = String(err?.message ?? err);
-      console.error(`[wallet] settlement tx to ${p.to} failed: ${msg}`);
+      console.error(`[wallet] tx to ${p.to} failed: ${msg}`);
       errors.push({ wallet: p.to, error: msg });
     }
   }
