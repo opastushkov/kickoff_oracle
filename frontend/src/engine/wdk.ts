@@ -7,6 +7,34 @@ export interface WdkWalletInfo {
   balance: string | null; // native balance in wei, best-effort
 }
 
+/**
+ * Execute settlement payouts as real Sepolia transactions via the sidecar's
+ * WDK wallet (runner-as-paymaster). Non-0x recipients (local placeholder
+ * identities) are skipped. Returns tx receipts, or null when nothing was sent.
+ */
+export async function executeOnChainSettlement(
+  settlement: { payouts: { wallet: string; amount: bigint }[] },
+  baseUrl = "http://127.0.0.1:8791",
+): Promise<{ wallet: string; txHash: string }[] | null> {
+  try {
+    const payouts = settlement.payouts
+      .filter((p) => p.wallet.startsWith("0x") && p.amount > 0n)
+      .map((p) => ({ to: p.wallet, amountMinor: p.amount.toString() }));
+    if (payouts.length === 0) return null;
+    const res = await fetch(`${baseUrl}/wallet/settle`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ payouts }),
+      signal: AbortSignal.timeout(180_000),
+    });
+    if (!res.ok) return null;
+    const j = await res.json();
+    return Array.isArray(j.txs) && j.txs.length > 0 ? j.txs : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function detectWdkWallet(
   baseUrl = "http://127.0.0.1:8791",
 ): Promise<WdkWalletInfo | null> {

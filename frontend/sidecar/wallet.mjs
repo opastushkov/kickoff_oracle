@@ -44,6 +44,36 @@ async function initWallet() {
   return cached;
 }
 
+// 1 test-USDt minor unit (cent) → wei. Default: 1 cent = 1e12 wei, so a
+// 10-USDt payout is 0.001 Sepolia ETH — small enough for faucet balances.
+const WEI_PER_MINOR = BigInt(process.env.WDK_WEI_PER_MINOR ?? "1000000000000");
+
+/**
+ * Execute settlement payouts as real Sepolia transactions from this wallet
+ * (runner-as-paymaster model). Returns per-recipient tx hashes; failures are
+ * collected, not thrown — settlement must degrade gracefully when unfunded.
+ */
+export async function sendSettlement(payouts) {
+  initPromise ??= initWallet();
+  const w = await initPromise;
+  const txs = [];
+  const errors = [];
+  for (const p of payouts) {
+    try {
+      const value = BigInt(p.amountMinor) * WEI_PER_MINOR;
+      const result = await w.account.sendTransaction({ to: p.to, value });
+      const hash = result?.hash ?? result?.txHash ?? String(result);
+      console.log(`[wallet] settlement tx → ${p.to}: ${hash}`);
+      txs.push({ wallet: p.to, txHash: hash });
+    } catch (err) {
+      const msg = String(err?.message ?? err);
+      console.error(`[wallet] settlement tx to ${p.to} failed: ${msg}`);
+      errors.push({ wallet: p.to, error: msg });
+    }
+  }
+  return { txs, errors };
+}
+
 export async function getWalletInfo() {
   initPromise ??= initWallet();
   const w = await initPromise;

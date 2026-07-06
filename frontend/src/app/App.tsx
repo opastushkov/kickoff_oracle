@@ -34,7 +34,7 @@ import {
   requestQvacModel,
   type QvacModelInfo,
 } from "../engine/qvac";
-import { detectWdkWallet } from "../engine/wdk";
+import { detectWdkWallet, executeOnChainSettlement } from "../engine/wdk";
 import { saveWdkIdentity } from "../engine/identity";
 import type {
   AuditEntry,
@@ -1564,14 +1564,34 @@ function SettlementScreen({
           <div className="border-t pt-4" style={{ borderColor: C.hairline }}>
             <div className="text-xs mb-3" style={{ ...fontBody, color: C.muted }}>Payouts</div>
             <div className="flex flex-col gap-2">
-              {settlement.payouts.map((p) => (
-                <div key={p.wallet} className="flex items-center justify-between py-2 border-b last:border-b-0" style={{ borderColor: C.hairline }}>
-                  <span style={{ ...fontBody, color: C.chalk }}>{nameOf(view, p.wallet)}</span>
-                  <span className="font-medium" style={{ ...fontBody, color: C.teal }}>
-                    receives {formatUSDt(p.amount)} test USDt
-                  </span>
-                </div>
-              ))}
+              {settlement.payouts.map((p) => {
+                const tx = settlement.txRefs?.find((t) => t.wallet === p.wallet);
+                return (
+                  <div key={p.wallet} className="flex items-center justify-between py-2 border-b last:border-b-0" style={{ borderColor: C.hairline }}>
+                    <span style={{ ...fontBody, color: C.chalk }}>{nameOf(view, p.wallet)}</span>
+                    <span className="flex items-center gap-3">
+                      <span className="font-medium" style={{ ...fontBody, color: C.teal }}>
+                        receives {formatUSDt(p.amount)} test USDt
+                      </span>
+                      {tx ? (
+                        <a
+                          href={`https://sepolia.etherscan.io/tx/${tx.txHash}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-xs underline"
+                          style={{ ...fontMono, color: C.teal }}
+                        >
+                          on-chain ↗
+                        </a>
+                      ) : (
+                        <span className="text-xs" style={{ ...fontBody, color: C.muted }}>
+                          ledger
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
           </div>
         </motion.div>
@@ -2315,6 +2335,7 @@ export default function App() {
       runtime: qvac ?? new MockOracleRuntime(1200),
       runtimeLabel: qvac ? "Runs locally via QVAC — models chosen per room · no cloud" : undefined,
       adapter: makeAdapter(key, qvac != null),
+      onSettlement: qvac ? executeOnChainSettlement : undefined,
     });
     engine.adoptIdentity(asParticipant(identity));
     engine.createRoom({ ...input, inviteKey: key });
@@ -2360,6 +2381,7 @@ export default function App() {
       runtime: qvac,
       runtimeLabel: "Runs locally via QVAC — models chosen per room · no cloud",
       adapter: makeAdapter(key, true),
+      onSettlement: executeOnChainSettlement,
     });
     const guest = asParticipant(identity);
     engine.adoptIdentity(guest);

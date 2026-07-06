@@ -105,6 +105,8 @@ export interface Settlement {
   payouts: { wallet: string; amount: bigint }[];
   explanation: string; // plain-language summary (UC-11)
   confirmedAt: number;
+  /** On-chain receipts (Sepolia tx per winner), attached asynchronously. */
+  txRefs?: { wallet: string; txHash: string }[];
 }
 
 export interface Market {
@@ -145,6 +147,7 @@ export type Op =
   | { type: "MARKET_RESOLVE"; marketId: string; resolution: Resolution }
   | { type: "FALLBACK_RESULT"; marketId: string; resolution?: Resolution; cancelReason?: string }
   | { type: "SETTLE"; settlement: Settlement }
+  | { type: "SETTLE_TX"; marketId: string; txs: { wallet: string; txHash: string }[] }
   | { type: "MARKET_CANCEL"; marketId: string; reason: string };
 
 export interface LoggedOp {

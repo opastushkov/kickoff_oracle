@@ -165,6 +165,15 @@ export function applyOp(s: RoomState, logged: LoggedOp): RoomState {
       return { ...next, balances };
     }
 
+    case "SETTLE_TX": {
+      const m = s.markets.find((x) => x.id === op.marketId);
+      if (!m || !m.settlement || m.settlement.txRefs) return s; // receipts attach once
+      return updMarket(s, op.marketId, (x) => ({
+        ...x,
+        settlement: { ...x.settlement!, txRefs: op.txs },
+      }));
+    }
+
     case "MARKET_CANCEL": {
       const m = s.markets.find((x) => x.id === op.marketId);
       if (!m || ["RESOLVED", "SETTLED", "CANCELLED"].includes(m.status)) return s;

@@ -119,6 +119,26 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  if (req.method === "POST" && req.url === "/wallet/settle") {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", async () => {
+      try {
+        const { payouts } = JSON.parse(body); // [{ to, amountMinor }]
+        if (!Array.isArray(payouts) || payouts.length === 0) throw new Error("payouts[] required");
+        const { sendSettlement } = await import("./wallet.mjs");
+        const out = await sendSettlement(payouts);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true, ...out }));
+      } catch (err) {
+        console.error("[wallet] settle error:", err?.message ?? err);
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: false, error: String(err?.message ?? err) }));
+      }
+    });
+    return;
+  }
+
   if (req.method === "GET" && req.url === "/health") {
     const def = models.get(DEFAULT_MODEL);
     res.writeHead(200, { "Content-Type": "application/json" });

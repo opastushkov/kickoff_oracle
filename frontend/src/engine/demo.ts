@@ -42,12 +42,19 @@ export interface DemoOptions {
   runtimeLabel?: string;
   /** The local user; joins the seeded room as themselves (distinct per peer). */
   identity?: Participant;
+  /** On-chain settlement executor (passed through to the engine). */
+  onSettlement?: import("./engine").EngineOptions["onSettlement"];
 }
 
 export async function createDemoEngine(opts: DemoOptions = {}): Promise<DemoHandle> {
   const runtime = new MockOracleRuntime(1200);
   // Deterministic seed: identical ops on every peer, deduped by content on sync.
-  const engine = new KickoffEngine({ runtime, adapter: opts.adapter, deterministic: true });
+  const engine = new KickoffEngine({
+    runtime,
+    adapter: opts.adapter,
+    deterministic: true,
+    onSettlement: opts.onSettlement,
+  });
 
   await engine.loginWithWallet("Oleksandr");
   engine.createRoom({

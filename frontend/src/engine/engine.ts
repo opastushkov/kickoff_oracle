@@ -22,6 +22,7 @@ import type {
   RoomPolicy,
   RoomState,
   RoomView,
+  Settlement,
   Side,
   TimelineEvent,
   TimelineEventType,
@@ -40,6 +41,12 @@ export interface EngineOptions {
    * (clock, author, content-hash) dedup then collapses into one history.
    */
   deterministic?: boolean;
+  /**
+   * Optional on-chain settlement executor (WDK): runs after SETTLE on the
+   * resolving peer; returned tx hashes attach to the settlement via SETTLE_TX.
+   * Fire-and-forget — settlement never blocks on the chain.
+   */
+  onSettlement?: (settlement: Settlement) => Promise<{ wallet: string; txHash: string }[] | null>;
 }
 
 interface LogEntry {
@@ -65,12 +72,14 @@ export class KickoffEngine {
   private adapter: P2PAdapter;
   private deterministic: boolean;
   private detTs = 1_750_000_000_000;
+  private onSettlement?: EngineOptions["onSettlement"];
 
   constructor(opts: EngineOptions) {
     this.runtime = opts.runtime;
     this.runtimeLabel = opts.runtimeLabel ?? MOCK_LABEL;
     this.adapter = opts.adapter ?? new InMemoryAdapter();
     this.deterministic = opts.deterministic ?? false;
+    this.onSettlement = opts.onSettlement;
     this.adapter.attach({
       deliver: (ops) => this.receive(ops),
       snapshot: () => this.log.map((e) => e.l),
@@ -280,17 +289,24 @@ export class KickoffEngine {
     const payouts = computePayouts(market.stakes, market.resolution.outcome);
     const pot = market.stakes.reduce((a, s) => a + s.amount, 0n);
     const explanation = await this.runtime.explain(market, market.resolution, market.verdicts);
-    this.append({
-      type: "SETTLE",
-      settlement: {
-        marketId,
-        pot,
-        winningSide: market.resolution.outcome,
-        payouts,
-        explanation,
-        confirmedAt: Date.now(),
-      },
-    });
+    const settlement: Settlement = {
+      marketId,
+      pot,
+      winningSide: market.resolution.outcome,
+      payouts,
+      explanation,
+      confirmedAt: Date.now(),
+    };
+    this.append({ type: "SETTLE", settlement });
+
+    // On-chain receipts (WDK, Sepolia): async, best-effort, never blocking.
+    if (this.onSettlement) {
+      void this.onSettlement(settlement)
+        .then((txs) => {
+          if (txs && txs.length > 0) this.append({ type: "SETTLE_TX", marketId, txs });
+        })
+        .catch(() => {});
+    }
   }
 
   // ─── reads ────────────────────────────────────────────────────────────────
@@ -314,6 +330,9 @@ export class KickoffEngine {
       entries.push({ key: "Resolved via", value: m.resolution.via });
     }
     entries.push({ key: "Settlement mode", value: "TEST_USDT" });
+    for (const tx of m.settlement?.txRefs ?? []) {
+      entries.push({ key: `Sepolia tx → ${tx.wallet.slice(0, 8)}…`, value: tx.txHash });
+    }
     if (m.resolution) {
       const minute = this.primaryMinuteOf(m);
       const time = new Date(m.resolution.resolvedAt).toLocaleTimeString();

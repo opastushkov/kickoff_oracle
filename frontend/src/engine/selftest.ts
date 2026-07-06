@@ -13,7 +13,10 @@ function assert(cond: boolean, label: string): void {
 const HEX64 = /^[0-9a-f]{64}$/;
 
 async function main() {
-  const { engine, runtime, emitPenaltyEvent } = await createDemoEngine();
+  const { engine, runtime, emitPenaltyEvent } = await createDemoEngine({
+    // Mock on-chain executor: returns a receipt per payout (UC-10 txRefs path).
+    onSettlement: async (s) => s.payouts.map((p) => ({ wallet: p.wallet, txHash: `0xtest_${p.wallet}` })),
+  });
   runtime.delayMs = 0; // instant oracles for the test
 
   // ── seed sanity ────────────────────────────────────────────────────────────
@@ -48,6 +51,18 @@ async function main() {
   const audit = engine.getAuditLog(DEMO.penaltyId);
   assert(audit.some((e) => e.key === "Evidence hash" && HEX64.test(e.value)), "audit log carries evidence hash");
   assert(audit.some((e) => e.key === "Threshold" && e.value === "2_of_3"), "audit log carries threshold");
+
+  // ── on-chain receipts attach asynchronously via SETTLE_TX ────────────────
+  await new Promise((r) => setTimeout(r, 20));
+  const settled = penalty();
+  assert(
+    (settled.settlement!.txRefs?.length ?? 0) === settled.settlement!.payouts.length,
+    "settlement receipts attached for every payout",
+  );
+  assert(
+    engine.getAuditLog(DEMO.penaltyId).some((e) => e.key.startsWith("Sepolia tx")),
+    "audit log carries on-chain tx rows",
+  );
 
   // ── locked evidence is enforced ───────────────────────────────────────────
   const before = penalty().bundle!.hash;
