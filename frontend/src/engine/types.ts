@@ -4,7 +4,8 @@
 export type Category = "OBJECTIVE" | "INTERPRETIVE"; // Social removed from scope
 export type Side = "YES" | "NO";
 export type VerdictValue = "YES" | "NO" | "INSUFFICIENT_EVIDENCE";
-export type OracleRole = "RULES" | "EVIDENCE" | "SKEPTIC";
+/** The tiebreaker is a process role (fallback judge), not a persona. */
+export const TIEBREAKER = "TIEBREAKER";
 
 export type MarketStatus =
   | "OPEN"
@@ -16,7 +17,8 @@ export type MarketStatus =
   | "CANCELLED";
 
 export interface OracleConfig {
-  role: OracleRole;
+  /** Committee slot id, e.g. "oracle-1". Oracles are interchangeable peers. */
+  id: string;
   model: string; // QVAC model id, chosen by the room creator (UC-01)
 }
 
@@ -79,7 +81,7 @@ export interface Stake {
 export interface OracleVerdict {
   marketId: string;
   bundleHash: string; // binds the verdict to the exact locked evidence
-  role: OracleRole | "TIEBREAKER";
+  oracle: string; // committee slot id, or "TIEBREAKER" for the fallback judge
   model: string;
   verdict: VerdictValue;
   confidence: number; // 0–100, informational only

@@ -96,13 +96,13 @@ export function applyOp(s: RoomState, logged: LoggedOp): RoomState {
       const m = s.markets.find((x) => x.id === verdict.marketId);
       if (!m || !m.bundle) return s;
       const validStatus =
-        verdict.role === "TIEBREAKER" ? m.status === "NO_CONSENSUS" : m.status === "RESOLVING";
+        verdict.oracle === "TIEBREAKER" ? m.status === "NO_CONSENSUS" : m.status === "RESOLVING";
       if (!validStatus) return s;
       if (verdict.bundleHash !== m.bundle.hash) return s; // wrong evidence → rejected
-      if (verdict.role !== "TIEBREAKER") {
+      if (verdict.oracle !== "TIEBREAKER") {
         const committee = s.room?.policy.committee ?? [];
-        if (!committee.some((c) => c.role === verdict.role)) return s;
-        if (m.verdicts.some((v) => v.role === verdict.role)) return s; // one per role
+        if (!committee.some((c) => c.id === verdict.oracle)) return s;
+        if (m.verdicts.some((v) => v.oracle === verdict.oracle)) return s; // one per slot
       }
       return updMarket(s, verdict.marketId, (x) => {
         const verdicts = [...x.verdicts, verdict];
@@ -110,7 +110,7 @@ export function applyOp(s: RoomState, logged: LoggedOp): RoomState {
         // yields NO_CONSENSUS on every peer; a met threshold waits for the
         // engine's MARKET_RESOLVE op (which carries the votes hash).
         const committeeSize = s.room?.policy.committee.length ?? 0;
-        const committeeVotes = verdicts.filter((v) => v.role !== "TIEBREAKER").length;
+        const committeeVotes = verdicts.filter((v) => v.oracle !== "TIEBREAKER").length;
         if (
           s.room &&
           committeeVotes === committeeSize &&

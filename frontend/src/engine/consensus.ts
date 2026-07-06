@@ -9,7 +9,7 @@ export interface Tally {
 }
 
 export function tally(verdicts: OracleVerdict[]): Tally {
-  const committee = verdicts.filter((v) => v.role !== "TIEBREAKER");
+  const committee = verdicts.filter((v) => v.oracle !== "TIEBREAKER");
   return {
     yes: committee.filter((v) => v.verdict === "YES").length,
     no: committee.filter((v) => v.verdict === "NO").length,

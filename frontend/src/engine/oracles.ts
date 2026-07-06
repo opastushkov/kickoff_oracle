@@ -1,19 +1,19 @@
 // Oracle runtime interface + mock implementation (doc/backend-design.md §7.2).
-// Phase 2 replaces MockOracleRuntime with a QVAC-backed implementation; the
-// engine only depends on this interface.
+// Oracles are interchangeable committee members — no personas. Independence
+// comes from separate inference runs, not from different instructions.
+// Phase 2 replaces MockOracleRuntime with the QVAC-backed implementation.
 
 import { sha256Hex } from "./crypto";
 import type {
   EvidenceBundle,
   Market,
-  OracleConfig,
   OracleVerdict,
   Resolution,
   VerdictValue,
 } from "./types";
 
 export interface JudgeRequest {
-  role: OracleConfig["role"] | "TIEBREAKER";
+  oracle: string; // committee slot id, or "TIEBREAKER" for the fallback judge
   model: string;
   question: string;
   bundle: EvidenceBundle;
@@ -33,7 +33,7 @@ export interface OracleRuntime {
   explain(market: Market, resolution: Resolution, verdicts: OracleVerdict[]): Promise<string>;
 }
 
-// ─── Mock runtime (Phase 1): scripted verdicts, real pipeline ────────────────
+// ─── Mock runtime (tests + no-sidecar fallback): scripted, deterministic ─────
 
 interface Script {
   verdict: VerdictValue;
@@ -41,56 +41,56 @@ interface Script {
   reason: string;
 }
 
-const SCRIPTS: { match: RegExp; byRole: Record<string, Script> }[] = [
+/** Scripts keyed by committee slot index so runs are deterministic. */
+const SCRIPTS: { match: RegExp; bySlot: Script[]; tiebreaker: Script }[] = [
   {
     match: /penalty/i,
-    byRole: {
-      RULES: {
+    bySlot: [
+      {
         verdict: "YES",
         confidence: 86,
-        reason: "The rule excerpt supports a penalty when a defender trips an opponent.",
+        reason: "The recorded contact in the box plus the VAR confirmation support the decision.",
       },
-      EVIDENCE: {
+      {
         verdict: "YES",
         confidence: 82,
-        reason: "The feed confirms a penalty and VAR confirmation.",
+        reason: "The feed event and the attached note both point to a correctly awarded penalty.",
       },
-      SKEPTIC: {
+      {
         verdict: "NO",
         confidence: 58,
-        reason:
-          "The evidence does not include video, so the contact may not be enough to prove the penalty was correct.",
+        reason: "Without video the severity of the contact cannot be verified from this bundle.",
       },
-      TIEBREAKER: {
-        verdict: "YES",
-        confidence: 74,
-        reason: "On the locked evidence alone, the VAR confirmation outweighs the missing video.",
-      },
+    ],
+    tiebreaker: {
+      verdict: "YES",
+      confidence: 74,
+      reason: "On the locked evidence alone, the VAR confirmation outweighs the missing video.",
     },
   },
   {
     match: /red card/i,
-    byRole: {
-      RULES: {
+    bySlot: [
+      {
         verdict: "YES",
         confidence: 71,
         reason: "A second bookable offence mandates a red card under the laws of the game.",
       },
-      EVIDENCE: {
+      {
         verdict: "INSUFFICIENT_EVIDENCE",
         confidence: 44,
-        reason: "The feed records the card but nothing about the severity of the challenge.",
+        reason: "The bundle records the card but nothing about the severity of the challenge.",
       },
-      SKEPTIC: {
+      {
         verdict: "NO",
         confidence: 52,
-        reason: "Without footage of the challenge, deservedness cannot be established.",
+        reason: "Deservedness cannot be established from the recorded events alone.",
       },
-      TIEBREAKER: {
-        verdict: "INSUFFICIENT_EVIDENCE",
-        confidence: 40,
-        reason: "The locked bundle does not describe the challenge itself, only its outcome.",
-      },
+    ],
+    tiebreaker: {
+      verdict: "INSUFFICIENT_EVIDENCE",
+      confidence: 40,
+      reason: "The locked bundle does not describe the challenge itself, only its outcome.",
     },
   },
 ];
@@ -101,25 +101,31 @@ const DEFAULT_SCRIPT: Script = {
   reason: "The locked evidence does not address this question directly.",
 };
 
+function slotIndex(oracle: string): number {
+  const m = oracle.match(/(\d+)$/);
+  return m ? Number(m[1]) - 1 : 0;
+}
+
 export class MockOracleRuntime implements OracleRuntime {
   constructor(public delayMs = 1200) {}
 
   async judge(req: JudgeRequest): Promise<JudgeResult> {
     if (this.delayMs > 0) await new Promise((r) => setTimeout(r, this.delayMs));
+    const set = SCRIPTS.find((s) => s.match.test(req.question));
     const script =
-      SCRIPTS.find((s) => s.match.test(req.question))?.byRole[req.role] ?? DEFAULT_SCRIPT;
+      req.oracle === "TIEBREAKER"
+        ? set?.tiebreaker ?? DEFAULT_SCRIPT
+        : set?.bySlot[slotIndex(req.oracle) % (set?.bySlot.length || 1)] ?? DEFAULT_SCRIPT;
     return { ...script, rawOutput: JSON.stringify(script) };
   }
 
   async explain(market: Market, resolution: Resolution, verdicts: OracleVerdict[]): Promise<string> {
     const { counts, outcome } = resolution;
     const agreeing = outcome === "YES" ? counts.yes : counts.no;
-    const total = verdicts.filter((v) => v.role !== "TIEBREAKER").length;
+    const total = verdicts.filter((v) => v.oracle !== "TIEBREAKER").length;
     const primary = market.bundle?.items.find((i) => i.weight === "PRIMARY")?.content ?? "the feed evidence";
     const secondary = market.bundle?.items.find((i) => i.weight === "SECONDARY")?.content;
-    const dissenter = verdicts.find(
-      (v) => v.role !== "TIEBREAKER" && v.verdict !== outcome,
-    );
+    const dissenter = verdicts.find((v) => v.oracle !== "TIEBREAKER" && v.verdict !== outcome);
     const parts = [
       resolution.via === "CONSENSUS"
         ? `The market resolved ${outcome} after ${agreeing} of ${total} oracles agreed.`
@@ -130,7 +136,7 @@ export class MockOracleRuntime implements OracleRuntime {
     ];
     if (dissenter) {
       parts.push(
-        `The ${dissenter.role.toLowerCase()} oracle ${dissenter.verdict === "INSUFFICIENT_EVIDENCE" ? "found the evidence insufficient" : "disagreed"}: ${dissenter.reason.replace(/\.$/, "").toLowerCase()}.`,
+        `One oracle ${dissenter.verdict === "INSUFFICIENT_EVIDENCE" ? "found the evidence insufficient" : "dissented"}: ${dissenter.reason.replace(/\.$/, "").toLowerCase()}.`,
       );
     }
     return parts.join(" ");
@@ -145,7 +151,7 @@ export async function toVerdict(
   return {
     marketId,
     bundleHash: req.bundle.hash,
-    role: req.role,
+    oracle: req.oracle,
     model: result.model ?? req.model,
     verdict: result.verdict,
     confidence: result.confidence,

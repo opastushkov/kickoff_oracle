@@ -14,13 +14,13 @@ export const DEMO = {
   goalId: "mkt_goal",
 };
 
-// One local model for the whole committee in Phase 2 — the sidecar hosts
-// Llama 3.2 1B; the three oracles differ by persona, not by weights.
+// One local model for the whole committee — oracles are interchangeable;
+// independence comes from separate inference runs.
 export const DEMO_POLICY: RoomPolicy = {
   committee: [
-    { role: "RULES", model: "Llama 3.2 1B" },
-    { role: "EVIDENCE", model: "Llama 3.2 1B" },
-    { role: "SKEPTIC", model: "Llama 3.2 1B" },
+    { id: "oracle-1", model: "Llama 3.2 1B" },
+    { id: "oracle-2", model: "Llama 3.2 1B" },
+    { id: "oracle-3", model: "Llama 3.2 1B" },
   ],
   threshold: 2,
   fallback: { kind: "TIEBREAKER_LLM", model: "Llama 3.2 1B" },

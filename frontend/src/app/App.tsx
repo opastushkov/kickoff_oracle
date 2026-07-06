@@ -2,7 +2,6 @@ import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import {
   Gavel,
-  Search,
   ShieldQuestion,
   Copy,
   Check,
@@ -74,15 +73,14 @@ const STATUS_LABEL: Record<string, string> = {
   SETTLED: "SETTLED",
   CANCELLED: "CANCELLED",
 };
-const ORACLE_META: Record<string, { name: string; icon: React.ElementType }> = {
-  RULES: { name: "Rules Oracle", icon: Gavel },
-  EVIDENCE: { name: "Evidence Oracle", icon: Search },
-  SKEPTIC: { name: "Skeptic Oracle", icon: ShieldQuestion },
-};
-
-function roleTitle(role: string): string {
-  return role.charAt(0) + role.slice(1).toLowerCase();
+/** "3 × Llama 3.2 1B" when the committee shares one model, else a list. */
+function committeeSummary(committee: { id: string; model: string }[]): string {
+  const models = [...new Set(committee.map((c) => c.model))];
+  return models.length === 1
+    ? `${committee.length} × ${models[0]}`
+    : committee.map((c) => `${c.id} (${c.model})`).join(" / ");
 }
+
 function policyLabel(view: RoomView): string {
   const p = view.room?.policy;
   if (!p) return "";
@@ -581,8 +579,8 @@ function LandingScreen({
           {/* Live stats strip */}
           <div className="flex items-center gap-8">
             {[
-              { value: "2-of-3", label: "Oracle threshold" },
-              { value: "3 oracles", label: "Rules · Evidence · Skeptic" },
+              { value: "N-of-M", label: "You pick the threshold" },
+              { value: "1–5", label: "Oracles per room" },
               { value: "Test USDt", label: "Testnet stakes only" },
               { value: "P2P", label: "No central server" },
             ].map(({ value, label }, i) => (
@@ -622,13 +620,13 @@ function LandingScreen({
               step: "03",
               icon: Gavel,
               title: "Oracles deliberate",
-              body: "Three local AI oracles — Rules Oracle, Evidence Oracle, and Skeptic Oracle — each review the locked evidence bundle independently and issue a YES, NO, or INSUFFICIENT EVIDENCE verdict.",
+              body: "A committee of independent local AI oracles — you choose how many and the consensus threshold — each reviews the locked evidence bundle in its own inference run and issues a YES, NO, or INSUFFICIENT EVIDENCE verdict.",
             },
             {
               step: "04",
               icon: CheckCircle2,
               title: "Threshold resolves",
-              body: "When 2 of 3 oracles agree, the market resolves automatically. QVAC generates a plain-language explanation. The audit log records every hash for verification.",
+              body: "When the room's threshold is reached — say 2 of 3 oracles agreeing — the market resolves automatically. QVAC generates a plain-language explanation. The audit log records every hash for verification.",
             },
           ].map(({ step, icon: Icon, title, body }) => (
             <div
@@ -686,9 +684,9 @@ function LandingScreen({
           <div className="flex flex-col gap-3">
             <p className="text-sm font-semibold uppercase tracking-widest mb-2" style={{ ...fontBody, color: C.muted }}>Oracle committee</p>
             {[
-              { name: "Rules Oracle", icon: Gavel, verdict: "YES", confidence: 86, reason: "The rule excerpt supports a penalty when a defender trips an opponent inside the box." },
-              { name: "Evidence Oracle", icon: Search, verdict: "YES", confidence: 82, reason: "The feed confirms a penalty was awarded and VAR upheld the decision." },
-              { name: "Skeptic Oracle", icon: ShieldQuestion, verdict: "NO", confidence: 58, reason: "No video evidence was provided. Contact alone may not be sufficient." },
+              { name: "Oracle 1", icon: Gavel, verdict: "YES", confidence: 86, reason: "The recorded contact in the box plus the VAR confirmation support the decision." },
+              { name: "Oracle 2", icon: Gavel, verdict: "YES", confidence: 82, reason: "The feed confirms a penalty was awarded and VAR upheld the decision." },
+              { name: "Oracle 3", icon: Gavel, verdict: "NO", confidence: 58, reason: "Without video, the severity of the contact cannot be verified from this evidence." },
             ].map(({ name, icon: Icon, verdict, confidence, reason }) => {
               const vc = verdict === "YES" ? C.green : C.red;
               return (
@@ -892,7 +890,7 @@ function RoomScreen({
             </span>
             <span className="text-xs" style={{ ...fontMono, color: C.chalk }}>
               {room.policy.threshold}-of-{room.policy.committee.length} threshold ·{" "}
-              {room.policy.committee.map((c) => `${roleTitle(c.role)} (${c.model})`).join(" / ")} · Fallback:{" "}
+              {committeeSummary(room.policy.committee)} · Fallback:{" "}
               {room.policy.fallback.kind === "FACTS" ? "Facts" : `Tiebreaker LLM (${room.policy.fallback.model})`}
             </span>
             <span className="ml-auto text-xs shrink-0" style={{ ...fontBody, color: C.muted }}>
@@ -1085,7 +1083,7 @@ function MarketScreen({
   const running = view.runningOracles.includes(market.id);
   const done = market.resolution != null;
   const committee = room.policy.committee;
-  const committeeVerdicts = market.verdicts.filter((v) => v.role !== "TIEBREAKER");
+  const committeeVerdicts = market.verdicts.filter((v) => v.oracle !== "TIEBREAKER");
   const canRun =
     market.status === "RESOLVING" && market.bundle != null && !running && !done && oracleOnline;
   const idleHint = !oracleOnline
@@ -1297,14 +1295,13 @@ function MarketScreen({
 
               <div className="flex flex-col gap-3">
                 {committee.map((cfg, i) => {
-                  const meta = ORACLE_META[cfg.role];
-                  const verdict = committeeVerdicts.find((v) => v.role === cfg.role);
+                  const verdict = committeeVerdicts.find((v) => v.oracle === cfg.id);
                   const state: OracleState = verdict ? "revealed" : running ? "analyzing" : "idle";
                   return (
                     <OracleCard
-                      key={cfg.role}
-                      name={meta?.name ?? roleTitle(cfg.role)}
-                      icon={meta?.icon ?? Gavel}
+                      key={cfg.id}
+                      name={`Oracle ${i + 1}`}
+                      icon={Gavel}
                       verdict={verdict?.verdict ?? "INSUFFICIENT_EVIDENCE"}
                       confidence={verdict?.confidence ?? 0}
                       reason={verdict?.reason ?? ""}
@@ -1335,7 +1332,7 @@ function MarketScreen({
                     const color = !v ? null : v.verdict === "YES" ? C.green : v.verdict === "NO" ? C.red : C.amber;
                     return (
                       <motion.div
-                        key={cfg.role}
+                        key={cfg.id}
                         className="flex-1 h-10 rounded flex items-center justify-center"
                         style={{
                           background: color ? color + "33" : C.panel2,
@@ -1705,18 +1702,15 @@ function CreateRoomModal({
   onCreate: (input: { name: string; matchContext: string; policy: RoomPolicy }) => void;
 }) {
   const [name, setName] = useState("My Watch Party");
-  const [committee, setCommittee] = useState([
-    { role: "RULES" as const, model: "Llama 3.2 1B", enabled: true },
-    { role: "EVIDENCE" as const, model: "Llama 3.2 1B", enabled: true },
-    { role: "SKEPTIC" as const, model: "Llama 3.2 1B", enabled: true },
-  ]);
+  const [count, setCount] = useState(3);
+  const [model, setModel] = useState("Llama 3.2 1B");
   const [threshold, setThreshold] = useState(2);
   const [fallbackKind, setFallbackKind] = useState<"FACTS" | "TIEBREAKER_LLM">("TIEBREAKER_LLM");
   const [fallbackModel, setFallbackModel] = useState("Llama 3.2 1B");
 
-  const enabled = committee.filter((c) => c.enabled);
-  const effThreshold = Math.min(Math.max(threshold, 1), Math.max(enabled.length, 1));
-  const valid = enabled.length > 0 && name.trim().length > 0;
+  const MAX_ORACLES = 5;
+  const effThreshold = Math.min(Math.max(threshold, 1), count);
+  const valid = name.trim().length > 0;
 
   const submit = () => {
     if (!valid) return;
@@ -1724,7 +1718,7 @@ function CreateRoomModal({
       name: name.trim(),
       matchContext: MATCH_FIXTURE.label,
       policy: {
-        committee: enabled.map(({ role, model }) => ({ role, model })),
+        committee: Array.from({ length: count }, (_, i) => ({ id: `oracle-${i + 1}`, model })),
         threshold: effThreshold,
         fallback:
           fallbackKind === "FACTS" ? { kind: "FACTS" } : { kind: "TIEBREAKER_LLM", model: fallbackModel },
@@ -1753,63 +1747,65 @@ function CreateRoomModal({
           </div>
         </div>
 
-        <div>
-          <FieldLabel>Oracle committee · LLM per oracle</FieldLabel>
-          <div className="flex flex-col gap-2">
-            {committee.map((c, i) => (
-              <div key={c.role} className="flex items-center gap-3">
-                <label className="flex items-center gap-2 flex-1 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={c.enabled}
-                    onChange={() =>
-                      setCommittee((prev) => prev.map((x, j) => (j === i ? { ...x, enabled: !x.enabled } : x)))
-                    }
-                  />
-                  <span className="text-sm" style={{ ...fontBody, color: C.chalk }}>
-                    {roleTitle(c.role)} Oracle
-                  </span>
-                </label>
-                <select
-                  className="px-2 py-1.5 rounded-lg text-sm"
-                  style={inputStyle}
-                  value={c.model}
-                  disabled={!c.enabled}
-                  onChange={(e) =>
-                    setCommittee((prev) => prev.map((x, j) => (j === i ? { ...x, model: e.target.value } : x)))
-                  }
-                >
-                  {QVAC_MODELS.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            ))}
+        <div className="flex gap-6">
+          <div>
+            <FieldLabel>Oracles on the committee</FieldLabel>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setCount((n) => Math.max(1, n - 1))}
+                className="w-8 h-8 rounded-lg border text-lg font-bold"
+                style={{ ...fontBody, color: C.chalk, borderColor: C.hairline }}
+              >
+                −
+              </button>
+              <span className="text-sm font-semibold" style={{ ...fontMono, color: C.chalk }}>
+                {count}
+              </span>
+              <button
+                onClick={() => setCount((n) => Math.min(MAX_ORACLES, n + 1))}
+                className="w-8 h-8 rounded-lg border text-lg font-bold"
+                style={{ ...fontBody, color: C.chalk, borderColor: C.hairline }}
+              >
+                +
+              </button>
+            </div>
           </div>
-        </div>
-
-        <div>
-          <FieldLabel>Consensus threshold</FieldLabel>
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => setThreshold((t) => Math.max(1, t - 1))}
-              className="w-8 h-8 rounded-lg border text-lg font-bold"
-              style={{ ...fontBody, color: C.chalk, borderColor: C.hairline }}
+          <div>
+            <FieldLabel>Consensus threshold</FieldLabel>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setThreshold((t) => Math.max(1, t - 1))}
+                className="w-8 h-8 rounded-lg border text-lg font-bold"
+                style={{ ...fontBody, color: C.chalk, borderColor: C.hairline }}
+              >
+                −
+              </button>
+              <span className="text-sm font-semibold" style={{ ...fontMono, color: C.chalk }}>
+                {effThreshold} of {count}
+              </span>
+              <button
+                onClick={() => setThreshold((t) => Math.min(count, t + 1))}
+                className="w-8 h-8 rounded-lg border text-lg font-bold"
+                style={{ ...fontBody, color: C.chalk, borderColor: C.hairline }}
+              >
+                +
+              </button>
+            </div>
+          </div>
+          <div className="flex-1">
+            <FieldLabel>Oracle model</FieldLabel>
+            <select
+              className={inputClass}
+              style={inputStyle}
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
             >
-              −
-            </button>
-            <span className="text-sm font-semibold" style={{ ...fontMono, color: C.chalk }}>
-              {effThreshold} of {enabled.length}
-            </span>
-            <button
-              onClick={() => setThreshold((t) => Math.min(Math.max(enabled.length, 1), t + 1))}
-              className="w-8 h-8 rounded-lg border text-lg font-bold"
-              style={{ ...fontBody, color: C.chalk, borderColor: C.hairline }}
-            >
-              +
-            </button>
+              {QVAC_MODELS.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
 

@@ -6,23 +6,18 @@
 import { MockOracleRuntime, type JudgeRequest, type JudgeResult, type OracleRuntime } from "./oracles";
 import type { EvidenceItem, Market, OracleVerdict, Resolution } from "./types";
 
-const PERSONAS: Record<JudgeRequest["role"], string> = {
-  RULES:
-    "You are the Rules Oracle on a football watch-party market committee. " +
-    "Judge the question strictly against the rulebook/context excerpts in the evidence. " +
-    "If the rules clearly support the decision, answer YES; if they clearly contradict it, answer NO.",
-  EVIDENCE:
-    "You are the Evidence Oracle on a football watch-party market committee. " +
-    "Judge only what the feed evidence factually confirms — no speculation beyond the recorded events.",
-  SKEPTIC:
-    "You are the Skeptic Oracle on a football watch-party market committee. " +
-    "Your job is to challenge whether the evidence is sufficient. If decisive material " +
-    "(e.g. video of the incident) is missing, lean NO or INSUFFICIENT_EVIDENCE.",
-  TIEBREAKER:
-    "You are the Tiebreaker Oracle. The committee split without consensus. " +
-    "Weigh the locked evidence neutrally and decide only if it genuinely supports a side; " +
-    "otherwise answer INSUFFICIENT_EVIDENCE.",
-};
+// One neutral instruction for every committee member — oracles are
+// interchangeable; independence comes from separate inference runs.
+const ORACLE_PROMPT =
+  "You are an independent oracle on a football watch-party market committee. " +
+  "Judge the question strictly and only on the locked evidence provided: the recorded " +
+  "events, any notes, and any rulebook excerpts. Do not speculate beyond the evidence; " +
+  "if it is not sufficient to decide, answer INSUFFICIENT_EVIDENCE.";
+
+const TIEBREAKER_PROMPT =
+  "You are the tiebreaker oracle. The committee split without consensus. " +
+  "Weigh the locked evidence neutrally and decide only if it genuinely supports a side; " +
+  "otherwise answer INSUFFICIENT_EVIDENCE.";
 
 const JSON_RULES =
   'Respond with a single JSON object and nothing else — no markdown, no prose around it: ' +
@@ -73,7 +68,10 @@ export class QvacOracleRuntime implements OracleRuntime {
 
   async judge(req: JudgeRequest): Promise<JudgeResult> {
     const messages = [
-      { role: "system", content: `${PERSONAS[req.role]}\n${JSON_RULES}` },
+      {
+        role: "system",
+        content: `${req.oracle === "TIEBREAKER" ? TIEBREAKER_PROMPT : ORACLE_PROMPT}\n${JSON_RULES}`,
+      },
       {
         role: "user",
         content:
@@ -101,7 +99,7 @@ export class QvacOracleRuntime implements OracleRuntime {
   async explain(market: Market, resolution: Resolution, verdicts: OracleVerdict[]): Promise<string> {
     try {
       const votes = verdicts
-        .map((v) => `${v.role}: ${v.verdict} (${v.confidence}%) — ${v.reason}`)
+        .map((v) => `${v.oracle}: ${v.verdict} (${v.confidence}%) — ${v.reason}`)
         .join("\n");
       const text = await this.complete(
         [

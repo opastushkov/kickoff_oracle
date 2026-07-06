@@ -206,10 +206,10 @@ export class KickoffEngine {
     this.running.add(marketId);
     this.notify();
     try {
-      // Sequential and independent — one session per oracle (§7.2).
+      // Sequential and independent — one inference run per oracle (§7.2).
       for (const cfg of room.policy.committee) {
         const req = {
-          role: cfg.role,
+          oracle: cfg.id,
           model: cfg.model,
           question: market.question,
           bundle: this.requireMarket(marketId).bundle!,
@@ -247,9 +247,9 @@ export class KickoffEngine {
       return;
     }
 
-    // TIEBREAKER_LLM: a fourth oracle judges the same locked bundle (§7.4).
+    // TIEBREAKER_LLM: an extra oracle judges the same locked bundle (§7.4).
     const req = {
-      role: "TIEBREAKER" as const,
+      oracle: "TIEBREAKER",
       model: fallback.model,
       question: market.question,
       bundle: market.bundle!,
@@ -263,7 +263,7 @@ export class KickoffEngine {
       this.running.delete(marketId);
       this.notify();
     }
-    const verdict = this.requireMarket(marketId).verdicts.find((v) => v.role === "TIEBREAKER");
+    const verdict = this.requireMarket(marketId).verdicts.find((v) => v.oracle === "TIEBREAKER");
     if (verdict && verdict.verdict !== "INSUFFICIENT_EVIDENCE") {
       await this.resolve(marketId, verdict.verdict, "TIEBREAKER", true);
     } else {
@@ -273,7 +273,7 @@ export class KickoffEngine {
 
   private async resolve(marketId: string, outcome: Side, via: Resolution["via"], viaFallback = false): Promise<void> {
     const market = this.requireMarket(marketId);
-    const ordered = [...market.verdicts].sort((a, b) => (a.role < b.role ? -1 : 1));
+    const ordered = [...market.verdicts].sort((a, b) => (a.oracle < b.oracle ? -1 : 1));
     const resolution: Resolution = {
       outcome,
       via,
