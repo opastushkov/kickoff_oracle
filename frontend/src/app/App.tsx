@@ -1893,7 +1893,9 @@ function JoinRoomModal({
     setError(null);
     const ok = await onJoin(key);
     if (!ok) {
-      setError("Room not found — no peers are online for this key.");
+      setError(
+        "Room not found yet — check the key and that the room's creator is online, then try again. The search keeps running in the background, so a retry is often instant.",
+      );
       setBusy(false);
     }
   };
@@ -1929,7 +1931,7 @@ function JoinRoomModal({
           className="w-full py-2.5 rounded-lg text-sm font-semibold transition-all hover:opacity-90"
           style={{ ...fontBody, background: busy ? C.panel2 : C.green, color: busy ? C.muted : "#fff" }}
         >
-          {busy ? "Searching the swarm…" : "Join room"}
+          {busy ? "Searching the swarm… (first contact can take up to a minute)" : "Join room"}
         </button>
       </div>
     </ModalShell>
@@ -2248,11 +2250,13 @@ export default function App() {
     });
     const guest = asParticipant(identity);
     engine.adoptIdentity(guest);
+    // First DHT contact for a topic can take 30-90s; keep searching for 60s.
+    // The sidecar stays joined to the swarm afterwards, so a retry is fast.
     const found = await new Promise<boolean>((resolve) => {
       const timer = setTimeout(() => {
         unsub();
         resolve(false);
-      }, 6000);
+      }, 60_000);
       const unsub = engine.subscribe((v) => {
         if (v.room) {
           clearTimeout(timer);
