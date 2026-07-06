@@ -2,7 +2,7 @@
 // Phase 1: single peer, in-memory op log. Phase 3 moves the log onto
 // Pears/Autobase without changing this surface.
 
-import { evaluateFacts, tally, thresholdOutcome } from "./consensus";
+import { tally, thresholdOutcome } from "./consensus";
 import { hashOf, shortHash } from "./crypto";
 import type { OracleRuntime } from "./oracles";
 import { toVerdict } from "./oracles";
@@ -13,7 +13,6 @@ import type {
   AuditEntry,
   Category,
   EvidenceItem,
-  FactsRule,
   LoggedOp,
   Market,
   Op,
@@ -145,7 +144,6 @@ export class KickoffEngine {
     question: string;
     category: Category;
     trigger?: TimelineEventType;
-    factsRule?: FactsRule;
   }): string {
     const room = this.requireRoom();
     const id = input.id ?? `mkt_${this.genId()}`;
@@ -159,7 +157,6 @@ export class KickoffEngine {
         createdBy: this.me ?? "system",
         createdAt: this.now(),
         trigger: input.trigger,
-        factsRule: input.factsRule,
       },
     });
     return id;
@@ -183,7 +180,6 @@ export class KickoffEngine {
     // Fixed ids (demo script) keep the op identical across peers → dedup by content.
     const full: TimelineEvent = { ...event, id: event.id ?? `evt_${this.genId()}` };
     this.append({ type: "EVENT_EMIT", event: full });
-    await this.shortCircuitObjectiveMarkets();
     return full;
   }
 
@@ -236,21 +232,10 @@ export class KickoffEngine {
     const room = this.requireRoom();
     if (market.status !== "NO_CONSENSUS") return;
 
-    const fallback = room.policy.fallback;
-    if (fallback.kind === "FACTS") {
-      const outcome = market.factsRule ? evaluateFacts(market.factsRule, this.state.timeline) : null;
-      if (outcome) {
-        await this.resolve(marketId, outcome, "FACTS", true);
-      } else {
-        this.append({ type: "FALLBACK_RESULT", marketId, cancelReason: "facts inconclusive" });
-      }
-      return;
-    }
-
     // TIEBREAKER_LLM: an extra oracle judges the same locked bundle (§7.4).
     const req = {
       oracle: "TIEBREAKER",
-      model: fallback.model,
+      model: room.policy.fallback.model,
       question: market.question,
       bundle: market.bundle!,
     };
@@ -306,16 +291,6 @@ export class KickoffEngine {
         confirmedAt: Date.now(),
       },
     });
-  }
-
-  /** Objective markets resolve directly from feed facts, no committee (UC-14). */
-  private async shortCircuitObjectiveMarkets(): Promise<void> {
-    for (const m of this.state.markets) {
-      if (m.category !== "OBJECTIVE" || !m.factsRule) continue;
-      if (!["OPEN", "AWAITING_EVIDENCE", "RESOLVING"].includes(m.status)) continue;
-      const outcome = evaluateFacts(m.factsRule, this.state.timeline);
-      if (outcome) await this.resolve(m.id, outcome, "FACTS");
-    }
   }
 
   // ─── reads ────────────────────────────────────────────────────────────────

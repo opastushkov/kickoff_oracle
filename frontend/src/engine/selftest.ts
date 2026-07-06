@@ -60,12 +60,10 @@ async function main() {
   assert(red.status === "CANCELLED", "tiebreaker INSUFFICIENT_EVIDENCE cancels the market");
   assert(engine.getView().balances["tb1qmarco"] >= 800n, "cancelled stakes refunded");
 
-  // ── objective facts short-circuit ─────────────────────────────────────────
+  // ── no facts path: markets resolve only through oracles ──────────────────
   await engine.emitEvent({ minute: 75, type: "GOAL", team: "Spain", description: "Goal — Spain", source: "REPLAY" });
   const goal = engine.getView().markets.find((m) => m.id === DEMO.goalId)!;
-  assert(goal.status === "SETTLED" && goal.resolution!.via === "FACTS", "objective market resolves from facts");
-  assert(goal.settlement!.payouts[0].wallet === "tb1qmarco" && goal.settlement!.payouts[0].amount === 3000n,
-    "objective winner takes the pot");
+  assert(goal.status === "OPEN", "feed events alone never resolve a market");
 
   // ── payout rounding: remainder distributed deterministically ─────────────
   const rounded = computePayouts(

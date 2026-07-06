@@ -89,8 +89,7 @@ function committeeSummary(committee: { id: string; model: string }[]): string {
 function policyLabel(view: RoomView): string {
   const p = view.room?.policy;
   if (!p) return "";
-  const fb = p.fallback.kind === "FACTS" ? "Facts" : "Tiebreaker LLM";
-  return `${p.threshold}-of-${p.committee.length} LLM consensus · Fallback: ${fb}`;
+  return `${p.threshold}-of-${p.committee.length} LLM consensus · Fallback: Tiebreaker LLM`;
 }
 function nameOf(view: RoomView, wallet: string): string {
   return view.participants.find((p) => p.wallet === wallet)?.displayName ?? wallet;
@@ -675,13 +674,13 @@ function LandingScreen({
               Two categories, one system
             </h2>
             <p className="leading-relaxed mb-8" style={{ ...fontBody, color: C.muted, fontSize: 17, lineHeight: 1.7 }}>
-              Markets are tagged by how they resolve. Objective questions settle on facts alone.
-              Interpretive questions require oracle reasoning.
+              Markets are tagged by the kind of question they ask — but every market
+              resolves the same way: the oracle committee judges the locked evidence.
             </p>
             <div className="flex flex-col gap-3">
               {[
-                { cat: "Objective", example: "Did Spain score before 80'?", note: "Settled by feed event match" },
-                { cat: "Interpretive", example: "Was the penalty decision correct?", note: "Requires oracle reasoning" },
+                { cat: "Objective", example: "Did Spain score before 80'?", note: "Clear-cut from the feed evidence" },
+                { cat: "Interpretive", example: "Was the penalty decision correct?", note: "Requires weighing the evidence" },
               ].map(({ cat, example, note }) => (
                 <div key={cat} className="flex items-start gap-4 p-4 rounded-xl border" style={{ borderColor: C.hairline, background: C.bg }}>
                   <CategoryTag cat={cat} />
@@ -747,9 +746,9 @@ function LandingScreen({
             <div className="w-12 h-12 rounded-xl flex items-center justify-center" style={{ background: "rgba(212,160,23,0.1)" }}>
               <AlertTriangle size={22} style={{ color: C.amber }} />
             </div>
-            <h3 className="font-bold" style={{ ...fontCondensed, fontSize: 26, color: C.chalk }}>No consensus? Facts or tiebreaker LLM.</h3>
+            <h3 className="font-bold" style={{ ...fontCondensed, fontSize: 26, color: C.chalk }}>No consensus? A tiebreaker decides.</h3>
             <p className="leading-relaxed" style={{ ...fontBody, color: C.muted, fontSize: 15, lineHeight: 1.7 }}>
-              When oracles split — one YES, one NO, one INSUFFICIENT — the system does not force a resolution. It falls back to the room policy: re-check the question against objective feed facts, or hand the same locked evidence to a dedicated tiebreaker LLM chosen by the room creator.
+              When oracles split — one YES, one NO, one INSUFFICIENT — the system does not force a resolution. A dedicated tiebreaker LLM, chosen by the room creator, judges the same locked evidence; if even it finds the evidence insufficient, the market cancels and every stake is refunded.
             </p>
             <div className="p-4 rounded-lg border mt-auto" style={{ background: C.bg, borderColor: C.hairline }}>
               <div className="text-sm font-semibold mb-2" style={{ ...fontBody, color: C.chalk }}>Was the red card deserved?</div>
@@ -904,8 +903,8 @@ function RoomScreen({
             </span>
             <span className="text-xs" style={{ ...fontMono, color: C.chalk }}>
               {room.policy.threshold}-of-{room.policy.committee.length} threshold ·{" "}
-              {committeeSummary(room.policy.committee)} · Fallback:{" "}
-              {room.policy.fallback.kind === "FACTS" ? "Facts" : `Tiebreaker LLM (${room.policy.fallback.model})`}
+              {committeeSummary(room.policy.committee)} · Fallback: Tiebreaker LLM (
+              {room.policy.fallback.model})
             </span>
             <span className="ml-auto text-xs shrink-0" style={{ ...fontBody, color: C.muted }}>
               Set by room creator
@@ -1402,13 +1401,11 @@ function MarketScreen({
                   style={{ background: "rgba(212,160,23,0.1)", border: `1px solid ${C.amber}55` }}
                 >
                   <div className="font-bold mb-1" style={{ ...fontCondensed, color: C.amber, fontSize: 20 }}>
-                    No consensus — fallback:{" "}
-                    {room.policy.fallback.kind === "FACTS" ? "Facts" : "Tiebreaker LLM"}
+                    No consensus — fallback: Tiebreaker LLM
                   </div>
                   <p className="text-xs mb-3" style={{ ...fontBody, color: C.muted }}>
-                    {room.policy.fallback.kind === "FACTS"
-                      ? "The question is re-checked against objective feed data only."
-                      : "A separate tiebreaker oracle judges the same locked evidence bundle."}
+                    A separate tiebreaker oracle ({room.policy.fallback.model}) judges the
+                    same locked evidence bundle.
                   </p>
                   <button
                     onClick={onRunFallback}
@@ -1803,7 +1800,6 @@ function CreateRoomModal({
   const [slotModels, setSlotModels] = useState<string[]>(() => Array(3).fill("Llama 3.2 1B"));
   const [tiebreakerModel, setTiebreakerModel] = useState("Llama 3.2 1B");
   const [threshold, setThreshold] = useState(2);
-  const [fallbackKind, setFallbackKind] = useState<"FACTS" | "TIEBREAKER_LLM">("TIEBREAKER_LLM");
   const [models, setModels] = useState<QvacModelInfo[] | null>(null);
 
   // Poll the sidecar's model catalog while the modal is open so download
@@ -1830,12 +1826,7 @@ function CreateRoomModal({
   const effThreshold = Math.min(Math.max(threshold, 1), count);
   // Without a sidecar the mock runtime serves any name; with one, every model
   // used by the committee (and the tiebreaker) must be downloaded first.
-  const neededModels = [
-    ...new Set([
-      ...slotModels.slice(0, count),
-      ...(fallbackKind === "TIEBREAKER_LLM" ? [tiebreakerModel] : []),
-    ]),
-  ];
+  const neededModels = [...new Set([...slotModels.slice(0, count), tiebreakerModel])];
   const modelReady = !sidecarOnline || neededModels.every((n) => infoOf(n)?.loaded);
   const valid = name.trim().length > 0 && modelReady;
 
@@ -1850,10 +1841,7 @@ function CreateRoomModal({
           model: slotModels[i] ?? slotModels[0] ?? "Llama 3.2 1B",
         })),
         threshold: effThreshold,
-        fallback:
-          fallbackKind === "FACTS"
-            ? { kind: "FACTS" }
-            : { kind: "TIEBREAKER_LLM", model: tiebreakerModel },
+        fallback: { kind: "TIEBREAKER_LLM", model: tiebreakerModel },
       },
     });
   };
@@ -1958,39 +1946,20 @@ function CreateRoomModal({
         </div>
 
         <div>
-          <FieldLabel>No-consensus fallback</FieldLabel>
-          <div className="flex items-center gap-2 mb-2">
-            {(["FACTS", "TIEBREAKER_LLM"] as const).map((kind) => (
-              <button
-                key={kind}
-                onClick={() => setFallbackKind(kind)}
-                className="px-4 py-2 rounded-lg text-sm font-medium border transition-all"
-                style={{
-                  ...fontBody,
-                  background: fallbackKind === kind ? C.green : "transparent",
-                  color: fallbackKind === kind ? "#fff" : C.chalk,
-                  borderColor: fallbackKind === kind ? C.green : C.hairline,
-                }}
-              >
-                {kind === "FACTS" ? "Facts" : "Tiebreaker LLM"}
-              </button>
-            ))}
+          <FieldLabel>No-consensus tiebreaker</FieldLabel>
+          <div className="mb-2">
+            <ModelSlotRow
+              label="Tiebreaker"
+              value={tiebreakerModel}
+              onChange={setTiebreakerModel}
+              catalog={catalog}
+              online={sidecarOnline}
+            />
           </div>
-          {fallbackKind === "TIEBREAKER_LLM" && (
-            <div className="mb-2">
-              <ModelSlotRow
-                label="Tiebreaker"
-                value={tiebreakerModel}
-                onChange={setTiebreakerModel}
-                catalog={catalog}
-                online={sidecarOnline}
-              />
-            </div>
-          )}
           <p className="text-xs" style={{ ...fontBody, color: C.muted }}>
-            {fallbackKind === "FACTS"
-              ? "Split committee → the question is re-checked against objective feed data only."
-              : "Split committee → a separate tiebreaker oracle judges the same locked evidence."}
+            Split committee → a separate tiebreaker oracle judges the same locked evidence;
+            if it also finds the evidence insufficient, the market cancels and stakes are
+            refunded.
           </p>
         </div>
 

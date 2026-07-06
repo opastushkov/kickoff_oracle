@@ -25,7 +25,8 @@ export interface OracleConfig {
 export interface RoomPolicy {
   committee: OracleConfig[];
   threshold: number; // votes required, e.g. 2 (of committee.length)
-  fallback: { kind: "FACTS" } | { kind: "TIEBREAKER_LLM"; model: string };
+  /** No-consensus fallback: an extra LLM judges the same locked evidence. */
+  fallback: { kind: "TIEBREAKER_LLM"; model: string };
 }
 
 export interface Room {
@@ -91,7 +92,7 @@ export interface OracleVerdict {
 
 export interface Resolution {
   outcome: Side;
-  via: "CONSENSUS" | "FACTS" | "TIEBREAKER";
+  via: "CONSENSUS" | "TIEBREAKER";
   counts: { yes: number; no: number; insufficient: number };
   votesHash: string; // SHA-256 over the ordered verdicts ("" for pure facts routes)
   resolvedAt: number;
@@ -106,14 +107,6 @@ export interface Settlement {
   confirmedAt: number;
 }
 
-/** Deterministic rule for objective markets and the FACTS fallback (UC-09, UC-14). */
-export interface FactsRule {
-  eventType: TimelineEventType;
-  team?: string;
-  beforeMinute?: number;
-  countAtLeast?: number; // default 1
-}
-
 export interface Market {
   id: string;
   roomId: string;
@@ -124,7 +117,6 @@ export interface Market {
   createdAt: number;
   /** Feed event type that flips AWAITING_EVIDENCE → RESOLVING (UC-05). */
   trigger?: TimelineEventType;
-  factsRule?: FactsRule;
   stakes: Stake[];
   bundle?: EvidenceBundle;
   verdicts: OracleVerdict[];
@@ -142,7 +134,7 @@ export type Op =
       type: "MARKET_CREATE";
       market: Pick<
         Market,
-        "id" | "roomId" | "question" | "category" | "createdBy" | "createdAt" | "trigger" | "factsRule"
+        "id" | "roomId" | "question" | "category" | "createdBy" | "createdAt" | "trigger"
       >;
     }
   | { type: "MARKET_LOCK"; marketId: string } // closes staking → AWAITING_EVIDENCE

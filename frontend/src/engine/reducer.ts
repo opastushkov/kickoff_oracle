@@ -123,8 +123,10 @@ export function applyOp(s: RoomState, logged: LoggedOp): RoomState {
     }
 
     case "MARKET_RESOLVE": {
+      // Only oracle-driven resolution exists: from a committee run (RESOLVING)
+      // or the tiebreaker after a split (NO_CONSENSUS).
       const m = s.markets.find((x) => x.id === op.marketId);
-      if (!m || !["OPEN", "AWAITING_EVIDENCE", "RESOLVING", "NO_CONSENSUS"].includes(m.status)) return s;
+      if (!m || !["RESOLVING", "NO_CONSENSUS"].includes(m.status)) return s;
       return updMarket(s, op.marketId, (x) => ({
         ...x,
         status: "RESOLVED",

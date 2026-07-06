@@ -101,12 +101,11 @@ export async function createDemoEngine(opts: DemoOptions = {}): Promise<DemoHand
   await engine.runOracles(DEMO.redCardId); // splits → NO_CONSENSUS by design
   runtime.delayMs = 1200;
 
-  // Objective market — resolves from feed facts alone (UC-14).
+  // Objective-category market — resolves through the committee like any other.
   engine.createMarket({
     id: DEMO.goalId,
     question: "Will Spain score a second goal before 80'?",
     category: "OBJECTIVE",
-    factsRule: { eventType: "GOAL", team: "Spain", beforeMinute: 80, countAtLeast: 2 },
   });
   engine.placeStake(DEMO.goalId, "tb1qmarco", "YES", 2000n);
   engine.placeStake(DEMO.goalId, "tb1qivan", "NO", 1000n);
