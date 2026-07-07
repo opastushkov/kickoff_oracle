@@ -19,7 +19,15 @@ export function tally(verdicts: OracleVerdict[]): Tally {
 
 /** Confidence is never an input — verdict counts only (UC-07 business rule). */
 export function thresholdOutcome(t: Tally, policy: RoomPolicy): Side | null {
-  if (t.yes >= policy.threshold) return "YES";
-  if (t.no >= policy.threshold) return "NO";
+  return sideAtQuorum(t, policy.threshold);
+}
+
+/**
+ * Jury resolution: the first side to reach `quorum` distinct verdicts wins.
+ * Same rule as the committee threshold, expressed over a dynamic peer set.
+ */
+export function sideAtQuorum(t: Tally, quorum: number): Side | null {
+  if (t.yes >= quorum) return "YES";
+  if (t.no >= quorum) return "NO";
   return null;
 }

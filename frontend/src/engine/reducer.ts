@@ -1,7 +1,7 @@
 // Pure reducers over the operation log (doc/backend-design.md §5).
 // Invalid ops are ignored identically on every peer, so they cannot fork state.
 
-import { tally, thresholdOutcome } from "./consensus";
+import { sideAtQuorum, tally, thresholdOutcome } from "./consensus";
 import type { LoggedOp, Market, RoomState, Side } from "./types";
 
 export function emptyState(): RoomState {
@@ -95,6 +95,29 @@ export function applyOp(s: RoomState, logged: LoggedOp): RoomState {
       const { verdict } = op;
       const m = s.markets.find((x) => x.id === verdict.marketId);
       if (!m || !m.bundle) return s;
+
+      // ── Distributed jury: one signed vote per participant device ──────────
+      // The swarm is the oracle. Each peer's on-device judge signs a verdict
+      // bound to the locked evidence hash; the market resolves once `quorum`
+      // peers agree. No committee slots, no single node deciding the result.
+      if (verdict.juror) {
+        const jury = s.room?.policy.jury;
+        if (!jury || m.status !== "RESOLVING") return s;
+        if (verdict.bundleHash !== m.bundle.hash) return s; // altered evidence → rejected
+        if (!s.participants.some((p) => p.wallet === verdict.juror)) return s; // jurors must be peers
+        if (m.verdicts.some((v) => v.juror === verdict.juror)) return s; // one vote per juror
+        return updMarket(s, verdict.marketId, (x) => {
+          const verdicts = [...x.verdicts, verdict];
+          const decided = sideAtQuorum(tally(verdicts), jury.quorum) !== null;
+          const everyoneVoted = verdicts.filter((v) => v.juror).length >= s.participants.length;
+          // A reached quorum stays RESOLVING — the resolver emits MARKET_RESOLVE
+          // with the votes hash. Only a fully-voted jury that never reached
+          // quorum falls through to the tiebreaker.
+          const status = !decided && everyoneVoted ? ("NO_CONSENSUS" as const) : x.status;
+          return { ...x, verdicts, status };
+        });
+      }
+
       const validStatus =
         verdict.oracle === "TIEBREAKER" ? m.status === "NO_CONSENSUS" : m.status === "RESOLVING";
       if (!validStatus) return s;

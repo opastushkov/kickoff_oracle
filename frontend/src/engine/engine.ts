@@ -2,7 +2,7 @@
 // Phase 1: single peer, in-memory op log. Phase 3 moves the log onto
 // Pears/Autobase without changing this surface.
 
-import { tally, thresholdOutcome } from "./consensus";
+import { sideAtQuorum, tally, thresholdOutcome } from "./consensus";
 import { hashOf, shortHash } from "./crypto";
 import type { OracleRuntime } from "./oracles";
 import { toVerdict } from "./oracles";
@@ -51,6 +51,14 @@ export interface EngineOptions {
     marketId: string;
     payouts: { wallet: string; amount: bigint }[];
   }) => Promise<{ wallet: string; txHash: string }[] | null>;
+  /**
+   * Distributed-jury auto-drive. When true and the room runs in jury mode, this
+   * peer automatically (a) casts its own on-device verdict on any market that
+   * enters RESOLVING, and (b) — if it is the room creator — tallies the signed
+   * verdicts and emits the resolution once quorum is reached. Off by default so
+   * the classic committee path and the deterministic demo seed are unchanged.
+   */
+  autoJury?: boolean;
 }
 
 interface LogEntry {
@@ -67,6 +75,9 @@ export class KickoffEngine {
   private running = new Set<string>();
   private meParticipant: Participant | null = null;
   private nextId = 1;
+  private juryVoted = new Set<string>(); // marketIds this peer has already voted on
+  private juryDriving = false; // reentrancy guard for the async drive loop
+  private juryDriveDirty = false; // state changed mid-drive → run once more
 
   private get me(): string | null {
     return this.meParticipant?.wallet ?? null;
@@ -77,6 +88,7 @@ export class KickoffEngine {
   private deterministic: boolean;
   private detTs = 1_750_000_000_000;
   private onSettlement?: EngineOptions["onSettlement"];
+  private autoJury: boolean;
 
   constructor(opts: EngineOptions) {
     this.runtime = opts.runtime;
@@ -84,6 +96,7 @@ export class KickoffEngine {
     this.adapter = opts.adapter ?? new InMemoryAdapter();
     this.deterministic = opts.deterministic ?? false;
     this.onSettlement = opts.onSettlement;
+    this.autoJury = opts.autoJury ?? false;
     this.adapter.attach({
       deliver: (ops) => this.receive(ops),
       snapshot: () => this.log.map((e) => e.l),
@@ -291,9 +304,97 @@ export class KickoffEngine {
     }
   }
 
+  // ─── distributed jury (UC-07 variant: the swarm is the oracle) ─────────────
+
+  /**
+   * Run *this* peer's on-device judge over the locked evidence and broadcast one
+   * signed verdict. Every participant calls this independently; the reducer keeps
+   * one vote per juror and binds it to the evidence hash. Safe to call repeatedly
+   * — it is a no-op once this peer has voted or while its inference is in flight.
+   */
+  async castJuryVerdict(marketId: string): Promise<void> {
+    const room = this.state.room;
+    const me = this.me;
+    if (!room?.policy.jury || !me) return;
+    const market = this.state.markets.find((x) => x.id === marketId);
+    if (!market?.bundle || market.status !== "RESOLVING") return;
+    if (this.juryVoted.has(marketId) || this.running.has(marketId)) return;
+    if (market.verdicts.some((v) => v.juror === me)) {
+      this.juryVoted.add(marketId);
+      return;
+    }
+    if (!this.state.participants.some((p) => p.wallet === me)) return; // must be a seated peer
+
+    this.running.add(marketId);
+    this.notify();
+    try {
+      const req = { oracle: me, model: room.policy.jury.model, question: market.question, bundle: market.bundle };
+      const result = await this.runtime.judge(req);
+      const verdict = { ...(await toVerdict(req, result, marketId)), juror: me };
+      this.juryVoted.add(marketId);
+      this.append({ type: "VERDICT_RECORD", verdict });
+    } finally {
+      this.running.delete(marketId);
+      this.notify();
+    }
+  }
+
+  /** The peer responsible for announcing tallied resolutions (room creator). */
+  private juryResolver(): string | null {
+    return this.state.room?.policy.jury ? (this.state.room.creator ?? null) : null;
+  }
+
+  /**
+   * Debounced auto-drive: cast our own verdict on live jury markets and, if we
+   * are the resolver, announce any market that has reached quorum (or fall to
+   * the tiebreaker once a fully-voted jury never agreed). Idempotent and
+   * convergence-safe: the resolution is a pure tally of the replicated signed
+   * verdicts, so any peer can verify it — the resolver only publishes the count.
+   */
+  private scheduleJuryDrive(): void {
+    if (!this.autoJury || !this.state.room?.policy.jury) return;
+    if (this.juryDriving) {
+      this.juryDriveDirty = true; // verdicts landed mid-drive — re-check after
+      return;
+    }
+    this.juryDriving = true;
+    queueMicrotask(() => {
+      void this.driveJury().finally(() => {
+        this.juryDriving = false;
+        if (this.juryDriveDirty) {
+          this.juryDriveDirty = false;
+          this.scheduleJuryDrive();
+        }
+      });
+    });
+  }
+
+  private async driveJury(): Promise<void> {
+    const jury = this.state.room?.policy.jury;
+    if (!jury) return;
+    const amResolver = this.me != null && this.me === this.juryResolver();
+
+    for (const m of this.state.markets) {
+      if (m.status === "RESOLVING" && m.bundle) {
+        await this.castJuryVerdict(m.id);
+        if (amResolver) {
+          const fresh = this.state.markets.find((x) => x.id === m.id);
+          if (fresh?.status === "RESOLVING") {
+            const outcome = sideAtQuorum(tally(fresh.verdicts), jury.quorum);
+            if (outcome) await this.resolve(m.id, outcome, "CONSENSUS");
+          }
+        }
+      } else if (m.status === "NO_CONSENSUS" && amResolver && !this.running.has(m.id)) {
+        // Jury deadlocked (everyone voted, no quorum) → the tiebreaker judge decides.
+        await this.runFallback(m.id);
+      }
+    }
+  }
+
   private async resolve(marketId: string, outcome: Side, via: Resolution["via"], viaFallback = false): Promise<void> {
     const market = this.requireMarket(marketId);
-    const ordered = [...market.verdicts].sort((a, b) => (a.oracle < b.oracle ? -1 : 1));
+    const keyOf = (v: { juror?: string; oracle: string }) => v.juror ?? v.oracle;
+    const ordered = [...market.verdicts].sort((a, b) => (keyOf(a) < keyOf(b) ? -1 : 1));
     const resolution: Resolution = {
       outcome,
       via,
@@ -348,7 +449,11 @@ export class KickoffEngine {
     const entries: AuditEntry[] = [{ key: "Market", value: m.question }];
     if (m.bundle) entries.push({ key: "Evidence hash", value: m.bundle.hash });
     if (m.resolution?.votesHash) entries.push({ key: "Oracle vote hash", value: m.resolution.votesHash });
-    if (room) {
+    if (room?.policy.jury) {
+      const jurors = m.verdicts.filter((v) => v.juror).length;
+      entries.push({ key: "Oracle mode", value: "DISTRIBUTED_JURY" });
+      entries.push({ key: "Quorum", value: `${room.policy.jury.quorum}_of_${jurors}_jurors` });
+    } else if (room) {
       entries.push({ key: "Threshold", value: `${room.policy.threshold}_of_${room.policy.committee.length}` });
     }
     if (m.resolution) {
@@ -440,6 +545,8 @@ export class KickoffEngine {
       this.state = replay(this.log.map((e) => e.l));
     }
     this.notify();
+    // React to new state: cast our vote / announce a quorum in jury mode.
+    this.scheduleJuryDrive();
   }
 
   private now(): number {

@@ -27,6 +27,14 @@ export interface RoomPolicy {
   threshold: number; // votes required, e.g. 2 (of committee.length)
   /** No-consensus fallback: an extra LLM judges the same locked evidence. */
   fallback: { kind: "TIEBREAKER_LLM"; model: string };
+  /**
+   * Distributed jury mode (UC-07 variant): when present, the oracle is not a
+   * fixed committee run on one node — every participant's device runs its own
+   * on-device judge over the locked evidence and signs one verdict. The market
+   * resolves once `quorum` peers agree on a side. `committee` is unused in this
+   * mode. Absent → classic single-node committee (unchanged behaviour).
+   */
+  jury?: { quorum: number; model: string };
 }
 
 export interface Room {
@@ -99,6 +107,12 @@ export interface OracleVerdict {
   confidence: number; // 0–100, informational only
   reason: string;
   outputHash: string; // SHA-256 of the raw model output
+  /**
+   * Jury mode only: the participant wallet whose on-device judge produced this
+   * verdict. Its presence marks the verdict as a distributed peer vote (one per
+   * juror) rather than a committee-slot run; absent for committee/tiebreaker.
+   */
+  juror?: string;
 }
 
 export interface Resolution {
