@@ -19,8 +19,9 @@ const DEFAULT_MODEL = "Llama 3.2 1B";
 // Catalog of models the room creator can pick from. Downloads happen on
 // demand through the QVAC registry (P2P, Hyperdrive-backed).
 const CATALOG = {
-  "Llama 3.2 1B": { constant: "LLAMA_3_2_1B_INST_Q4_0", sizeMB: 770 },
+  "Qwen3 4B": { constant: "QWEN3_4B_INST_Q4_K_M", sizeMB: 2500 },
   "Qwen3 1.7B": { constant: "QWEN3_1_7B_INST_Q4", sizeMB: 1100 },
+  "Llama 3.2 1B": { constant: "LLAMA_3_2_1B_INST_Q4_0", sizeMB: 770 },
   "Qwen3 0.6B": { constant: "QWEN3_600M_INST_Q4", sizeMB: 480 },
   "SmolLM2 360M": { constant: "SMOLLM2_360M_INST_Q8", sizeMB: 390 },
 };

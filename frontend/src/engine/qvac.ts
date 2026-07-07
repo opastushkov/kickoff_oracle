@@ -8,16 +8,20 @@ import type { EvidenceItem, Market, OracleVerdict, Resolution } from "./types";
 
 // One neutral instruction for every committee member — oracles are
 // interchangeable; independence comes from separate inference runs.
+const RULES =
+  "Decide using ONLY the locked evidence provided (the recorded match events and stats). " +
+  "Answer YES only if the evidence EXPLICITLY and fully supports the claim. " +
+  "If the evidence contradicts the claim, or does not contain enough to support it, answer NO. " +
+  "For counting or numeric claims (e.g. 'scored N goals'), count ONLY what the evidence " +
+  "explicitly shows — never assume, round up, or inflate. " +
+  "Never invent players, goals, or events that are not written in the evidence. " +
+  "Use INSUFFICIENT_EVIDENCE only when the evidence is genuinely silent on the subject.";
+
 const ORACLE_PROMPT =
-  "You are an independent oracle on a football watch-party market committee. " +
-  "Judge the question strictly and only on the locked evidence provided: the recorded " +
-  "events, any notes, and any rulebook excerpts. Do not speculate beyond the evidence; " +
-  "if it is not sufficient to decide, answer INSUFFICIENT_EVIDENCE.";
+  "You are an independent oracle judging a YES/NO question about a football match. " + RULES;
 
 const TIEBREAKER_PROMPT =
-  "You are the tiebreaker oracle. The committee split without consensus. " +
-  "Weigh the locked evidence neutrally and decide only if it genuinely supports a side; " +
-  "otherwise answer INSUFFICIENT_EVIDENCE.";
+  "You are the tiebreaker oracle; the jury split without consensus. Judge neutrally. " + RULES;
 
 const JSON_RULES =
   'Respond with a single JSON object and nothing else — no markdown, no prose around it: ' +
