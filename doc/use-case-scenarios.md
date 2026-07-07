@@ -179,9 +179,9 @@ as market evidence.
 
 ---
 
-## UC-06 — Assemble and lock an evidence bundle
+## UC-06 — Lock the match feed as evidence
 
-**Primary actors:** Room creator, System · **Status: Real** (the creator selects feed events — goals, cards, penalties, per-player stat lines — in the "Attach evidence & lock bundle" modal; the engine canonical-JSON-hashes and locks the bundle; re-locking is rejected by the reducer. Evidence is feed-only by design: participants cannot author facts. Manual notes and rulebook excerpts remain in the data model but are hidden from the UI for now)
+**Primary actors:** Room creator, System · **Status: Real** (the jury judges the **whole match feed**. The creator clicks "Lock the match feed & start jury"; the engine snapshots every feed event so far, canonical-JSON-hashes it, and freezes it — one click, no selection. Re-locking is rejected by the reducer. Evidence is feed-only by design: participants cannot author facts, and the jury sees the entire feed, not a curated subset. The hash binds every juror's verdict to exactly this evidence.)
 
 **Goal:** Fix the exact evidence the oracles will judge, so the verdict is verifiable and
 cannot be gamed by re-rolling evidence.

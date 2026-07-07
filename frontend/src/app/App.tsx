@@ -1262,13 +1262,14 @@ function MarketScreen({
               {market.bundle ? (
                 <div className="flex items-center gap-1.5 text-xs" style={{ ...fontBody, color: C.muted }}>
                   <Lock size={10} style={{ color: C.amber }} />
-                  Evidence locked before voting
+                  Feed locked — the jury judges these {market.bundle.items.length} events
                 </div>
               ) : (
                 <>
                   <p className="text-xs leading-relaxed" style={{ ...fontBody, color: C.muted }}>
-                    The room creator selects feed events — goals, cards, penalties, player
-                    stats — as the bundle. It is hashed and locked before any oracle sees it.
+                    The jury judges the <strong>whole match feed</strong>. The creator
+                    freezes it — every event so far, hashed and locked — before any juror
+                    sees it, so the verdict is bound to exactly this evidence.
                   </p>
                   {isCreator && market.status === "AWAITING_EVIDENCE" && (
                     <button
@@ -1276,12 +1277,12 @@ function MarketScreen({
                       className="w-full py-2 rounded-lg text-xs font-semibold transition-all hover:opacity-90"
                       style={{ ...fontBody, background: C.green, color: "#fff" }}
                     >
-                      Attach evidence & lock bundle
+                      Lock the match feed &amp; start jury
                     </button>
                   )}
                   {isCreator && market.status === "OPEN" && (
                     <p className="text-xs" style={{ ...fontBody, color: C.muted }}>
-                      Close staking first (button in the header), then attach evidence here.
+                      Close staking first (button in the header), then lock the feed here.
                     </p>
                   )}
                 </>
@@ -2154,93 +2155,6 @@ function CreateMarketModal({
   );
 }
 
-/** UC-06: the room creator locks the evidence bundle — feed events only. */
-function LockBundleModal({
-  view,
-  onClose,
-  onLock,
-}: {
-  view: RoomView;
-  onClose: () => void;
-  onLock: (items: EvidenceItem[]) => void;
-}) {
-  const events = [...view.timeline].sort((a, b) => a.minute - b.minute);
-  const [selected, setSelected] = useState<Set<string>>(
-    () => new Set(events.length > 0 ? [events[events.length - 1].id] : []),
-  );
-  const valid = selected.size > 0;
-
-  const submit = () => {
-    if (!valid) return;
-    const items: EvidenceItem[] = [];
-    for (const ev of events) {
-      if (!selected.has(ev.id)) continue;
-      items.push({
-        weight: "PRIMARY",
-        kind: "FEED_EVENT",
-        content: `${ev.minute}' — ${ev.description}${ev.detail ? ` · ${ev.detail}` : ""}`,
-        eventRef: ev.id,
-      });
-    }
-    onLock(items);
-  };
-
-  return (
-    <ModalShell title="Attach evidence & lock bundle" onClose={onClose}>
-      <div className="flex flex-col gap-4">
-        <div>
-          <FieldLabel>Feed events (the only source of evidence)</FieldLabel>
-          {events.length === 0 ? (
-            <p className="text-xs" style={{ ...fontBody, color: C.muted }}>
-              No events on the feed yet — wait for the match to produce some.
-            </p>
-          ) : (
-            <div className="flex flex-col gap-1.5 max-h-56 overflow-y-auto">
-              {events.map((ev) => (
-                <label key={ev.id} className="flex items-center gap-2 cursor-pointer text-sm" style={{ ...fontBody, color: C.chalk }}>
-                  <input
-                    type="checkbox"
-                    checked={selected.has(ev.id)}
-                    onChange={() =>
-                      setSelected((prev) => {
-                        const next = new Set(prev);
-                        if (next.has(ev.id)) next.delete(ev.id);
-                        else next.add(ev.id);
-                        return next;
-                      })
-                    }
-                  />
-                  {ev.minute}' — {ev.description}
-                  {ev.detail ? ` · ${ev.detail}` : ""}
-                </label>
-              ))}
-            </div>
-          )}
-        </div>
-        <div className="pt-2 border-t" style={{ borderColor: C.hairline }}>
-          <p className="text-xs mb-3" style={{ ...fontBody, color: C.amber }}>
-            Locking is permanent: the bundle is hashed and the oracles judge exactly this
-            evidence. It cannot be changed or re-rolled afterwards.
-          </p>
-          <button
-            onClick={submit}
-            disabled={!valid}
-            className="w-full py-2.5 rounded-lg text-sm font-semibold transition-all hover:opacity-90"
-            style={{
-              ...fontBody,
-              background: valid ? C.green : C.panel2,
-              color: valid ? "#fff" : C.muted,
-              cursor: valid ? "pointer" : "default",
-            }}
-          >
-            Lock evidence bundle
-          </button>
-        </div>
-      </div>
-    </ModalShell>
-  );
-}
-
 // ─── App root ─────────────────────────────────────────────────────────────────
 export default function App() {
   const [screen, setScreen] = useState<Screen>("landing");
@@ -2248,7 +2162,7 @@ export default function App() {
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [selectedMarketId, setSelectedMarketId] = useState<string>("");
   const [modal, setModal] = useState<
-    "createRoom" | "joinRoom" | "createMarket" | "lockBundle" | null
+    "createRoom" | "joinRoom" | "createMarket" | null
   >(null);
   const feedStops = useRef<Record<string, () => void>>({});
   const [view, setView] = useState<RoomView | null>(null);
@@ -2320,9 +2234,19 @@ export default function App() {
   const handleCloseStaking = () => {
     activeEngine?.lockMarket(selectedMarketId);
   };
-  const handleLockBundle = (items: EvidenceItem[]) => {
-    void activeEngine?.lockBundle(selectedMarketId, items);
-    setModal(null);
+  // The jury judges the WHOLE match feed. Locking snapshots every feed event as
+  // of this instant, hashes it, and freezes it — that's the accountability step.
+  const handleLockEvidence = () => {
+    if (!activeEngine || !view) return;
+    const items: EvidenceItem[] = [...view.timeline]
+      .sort((a, b) => a.minute - b.minute)
+      .map((ev) => ({
+        weight: "PRIMARY" as const,
+        kind: "FEED_EVENT" as const,
+        content: `${ev.minute}' — ${ev.description}${ev.detail ? ` · ${ev.detail}` : ""}`,
+        eventRef: ev.id,
+      }));
+    void activeEngine.lockBundle(selectedMarketId, items);
   };
   const handleLeaveRoom = () => {
     setActiveKey(null);
@@ -2482,7 +2406,7 @@ export default function App() {
               marketId={selectedMarketId}
               oracleOnline={sidecarUp}
               onCloseStaking={handleCloseStaking}
-              onLockBundle={() => setModal("lockBundle")}
+              onLockBundle={handleLockEvidence}
               onRunFallback={handleRunFallback}
               onStake={handleStake}
             />
@@ -2512,9 +2436,6 @@ export default function App() {
           onCreate={handleCreateMarket}
           policyText={policyLabel(view)}
         />
-      )}
-      {modal === "lockBundle" && view && (
-        <LockBundleModal view={view} onClose={() => setModal(null)} onLock={handleLockBundle} />
       )}
     </div>
   );
