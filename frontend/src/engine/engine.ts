@@ -226,7 +226,40 @@ export class KickoffEngine {
     // Fixed ids (demo script) keep the op identical across peers → dedup by content.
     const full: TimelineEvent = { ...event, id: event.id ?? `evt_${this.genId()}` };
     this.append({ type: "EVENT_EMIT", event: full });
+    if (full.type === "FULL_TIME") await this.autoResolveAtFullTime();
     return full;
+  }
+
+  /**
+   * At full time the creator auto-closes staking and freezes the complete feed
+   * as each market's evidence — so no manual "close staking" / "lock evidence"
+   * step is needed. Each device then casts its verdict via castJuryVerdict.
+   */
+  private async autoResolveAtFullTime(): Promise<void> {
+    if (!this.state.room?.policy.jury) return; // jury-mode behaviour only
+    if (this.me == null || this.me !== this.state.room?.creator) return;
+    if (!this.state.timeline.some((e) => e.type === "FULL_TIME")) return;
+    const ids = this.state.markets.map((m) => m.id);
+    for (const id of ids) {
+      const m = this.state.markets.find((x) => x.id === id);
+      if (m?.status === "OPEN") this.append({ type: "MARKET_LOCK", marketId: id });
+    }
+    for (const id of ids) {
+      const m = this.state.markets.find((x) => x.id === id);
+      if (m && !m.bundle && m.status === "AWAITING_EVIDENCE") await this.lockWholeFeed(id);
+    }
+  }
+
+  private async lockWholeFeed(marketId: string): Promise<void> {
+    const items: EvidenceItem[] = [...this.state.timeline]
+      .sort((a, b) => a.minute - b.minute)
+      .map((ev) => ({
+        weight: "PRIMARY",
+        kind: "FEED_EVENT",
+        content: `${ev.minute}' — ${ev.description}${ev.detail ? ` · ${ev.detail}` : ""}`,
+        eventRef: ev.id,
+      }));
+    await this.lockBundle(marketId, items);
   }
 
   async lockBundle(marketId: string, items: EvidenceItem[]): Promise<void> {
@@ -372,20 +405,18 @@ export class KickoffEngine {
   private async driveJury(): Promise<void> {
     const jury = this.state.room?.policy.jury;
     if (!jury) return;
+    // Jurors cast their verdict via an explicit per-device action (castJuryVerdict),
+    // not automatically. The resolver's only automatic job is to tally the signed
+    // verdicts and publish the outcome once quorum is reached (or the tiebreaker).
     const amResolver = this.me != null && this.me === this.juryResolver();
+    if (!amResolver) return;
 
     for (const m of this.state.markets) {
       if (m.status === "RESOLVING" && m.bundle) {
-        await this.castJuryVerdict(m.id);
-        if (amResolver) {
-          const fresh = this.state.markets.find((x) => x.id === m.id);
-          if (fresh?.status === "RESOLVING") {
-            const outcome = sideAtQuorum(tally(fresh.verdicts), jury.quorum);
-            if (outcome) await this.resolve(m.id, outcome, "CONSENSUS");
-          }
-        }
-      } else if (m.status === "NO_CONSENSUS" && amResolver && !this.running.has(m.id)) {
-        // Jury deadlocked (everyone voted, no quorum) → the tiebreaker judge decides.
+        const outcome = sideAtQuorum(tally(m.verdicts), jury.quorum);
+        if (outcome) await this.resolve(m.id, outcome, "CONSENSUS");
+      } else if (m.status === "NO_CONSENSUS" && !this.running.has(m.id)) {
+        // Jury split (everyone voted, no quorum) → the tiebreaker judge decides.
         await this.runFallback(m.id);
       }
     }

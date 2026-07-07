@@ -1068,8 +1068,7 @@ function MarketScreen({
   me,
   marketId,
   oracleOnline,
-  onCloseStaking,
-  onLockBundle,
+  onJudge,
   onRunFallback,
   onStake,
 }: {
@@ -1078,8 +1077,7 @@ function MarketScreen({
   me: string;
   marketId: string;
   oracleOnline: boolean;
-  onCloseStaking: () => void;
-  onLockBundle: () => void;
+  onJudge: () => void;
   onRunFallback: () => void;
   onStake: (side: Side, amount: bigint) => Promise<string | null>;
 }) {
@@ -1125,13 +1123,18 @@ function MarketScreen({
   const yesVotes = jurorVerdicts.filter((v) => v.verdict === "YES").length;
   const noVotes = jurorVerdicts.filter((v) => v.verdict === "NO").length;
   const tiebreaker = market.verdicts.find((v) => v.oracle === "TIEBREAKER");
+  const myVerdict = jurorVerdicts.find((v) => v.juror === me);
+  const matchEnded = view.timeline.some((e) => e.type === "FULL_TIME");
+  // This device can judge once the match has ended (evidence auto-locked) and it
+  // hasn't voted yet.
+  const canJudge = market.status === "RESOLVING" && market.bundle != null && !myVerdict && !running && oracleOnline;
   const idleHint = !oracleOnline
     ? "Oracle node offline — start the sidecar so this device can judge"
-    : market.status === "OPEN"
-      ? "Close staking, then attach evidence to start the jury"
-      : market.status === "AWAITING_EVIDENCE"
-        ? "Attach evidence and lock the bundle to start the jury"
-        : "Each device judges the locked evidence and signs one verdict";
+    : !matchEnded
+      ? "Staking is open — the market resolves when the match ends"
+      : myVerdict
+        ? "Your verdict is in — waiting for the rest of the jury"
+        : "Run your device's juror on the locked match feed";
 
   return (
     <div className="flex-1 flex flex-col" style={{ background: C.bg }}>
@@ -1160,17 +1163,13 @@ function MarketScreen({
               </h1>
               <StatusChip status={STATUS_LABEL[market.status] ?? market.status} />
             </div>
-            {isCreator && market.status === "OPEN" && (
-              <div className="flex">
-                <button
-                  onClick={onCloseStaking}
-                  className="ml-auto px-3 py-1.5 rounded-lg text-xs font-medium border transition-all hover:opacity-80"
-                  style={{ ...fontBody, color: C.amber, borderColor: C.amber + "66", background: "rgba(212,160,23,0.08)" }}
-                >
-                  Close staking
-                </button>
-              </div>
-            )}
+            <p className="text-xs" style={{ ...fontBody, color: C.muted }}>
+              {market.status === "OPEN"
+                ? "Staking is open — this market resolves automatically when the match ends."
+                : market.status === "SETTLED"
+                  ? "Resolved by the distributed jury."
+                  : "Staking closed at full time — the jury is judging the match feed."}
+            </p>
           </div>
 
           {/* Stake panel */}
@@ -1275,30 +1274,14 @@ function MarketScreen({
               {market.bundle ? (
                 <div className="flex items-center gap-1.5 text-xs" style={{ ...fontBody, color: C.muted }}>
                   <Lock size={10} style={{ color: C.amber }} />
-                  Feed locked — the jury judges these {market.bundle.items.length} events
+                  Feed locked at full time — the jury judges these {market.bundle.items.length} events
                 </div>
               ) : (
-                <>
-                  <p className="text-xs leading-relaxed" style={{ ...fontBody, color: C.muted }}>
-                    The jury judges the <strong>whole match feed</strong>. The creator
-                    freezes it — every event so far, hashed and locked — before any juror
-                    sees it, so the verdict is bound to exactly this evidence.
-                  </p>
-                  {isCreator && market.status === "AWAITING_EVIDENCE" && (
-                    <button
-                      onClick={onLockBundle}
-                      className="w-full py-2 rounded-lg text-xs font-semibold transition-all hover:opacity-90"
-                      style={{ ...fontBody, background: C.green, color: "#fff" }}
-                    >
-                      Lock the match feed &amp; start jury
-                    </button>
-                  )}
-                  {isCreator && market.status === "OPEN" && (
-                    <p className="text-xs" style={{ ...fontBody, color: C.muted }}>
-                      Close staking first (button in the header), then lock the feed here.
-                    </p>
-                  )}
-                </>
+                <p className="text-xs leading-relaxed" style={{ ...fontBody, color: C.muted }}>
+                  The jury judges the <strong>whole match feed</strong>. When the match
+                  ends, the feed is automatically frozen and hashed — so every juror's
+                  verdict is bound to exactly this evidence.
+                </p>
               )}
             </div>
 
@@ -1339,9 +1322,23 @@ function MarketScreen({
                 })}
               </div>
 
+              {canJudge && (
+                <button
+                  onClick={onJudge}
+                  className="w-full py-2.5 rounded-lg text-sm font-semibold transition-all hover:opacity-90"
+                  style={{ ...fontBody, background: C.green, color: "#fff" }}
+                >
+                  ⚖ Run my juror
+                </button>
+              )}
               <div className="text-xs text-center" style={{ ...fontBody, color: C.muted }}>
-                {market.bundle ? view.oracleRuntime : idleHint}
+                {running ? "Your device is judging…" : idleHint}
               </div>
+              {market.bundle && (
+                <div className="text-xs text-center" style={{ ...fontBody, color: C.muted }}>
+                  {view.oracleRuntime}
+                </div>
+              )}
             </div>
 
             {/* C. Jury result */}
@@ -2427,22 +2424,10 @@ export default function App() {
     activeEngine.placeStake(selectedMarketId, identity.wallet, side, amount, txRef);
     return null;
   };
-  const handleCloseStaking = () => {
-    activeEngine?.lockMarket(selectedMarketId);
-  };
-  // The jury judges the WHOLE match feed. Locking snapshots every feed event as
-  // of this instant, hashes it, and freezes it — that's the accountability step.
-  const handleLockEvidence = () => {
-    if (!activeEngine || !view) return;
-    const items: EvidenceItem[] = [...view.timeline]
-      .sort((a, b) => a.minute - b.minute)
-      .map((ev) => ({
-        weight: "PRIMARY" as const,
-        kind: "FEED_EVENT" as const,
-        content: `${ev.minute}' — ${ev.description}${ev.detail ? ` · ${ev.detail}` : ""}`,
-        eventRef: ev.id,
-      }));
-    void activeEngine.lockBundle(selectedMarketId, items);
+  // Staking auto-closes and evidence auto-locks at full time; each participant
+  // then runs their own device's juror on the locked feed.
+  const handleJudge = () => {
+    void activeEngine?.castJuryVerdict(selectedMarketId);
   };
   const handleLeaveRoom = () => {
     setActiveKey(null);
@@ -2611,8 +2596,7 @@ export default function App() {
               me={identity.wallet}
               marketId={selectedMarketId}
               oracleOnline={sidecarUp}
-              onCloseStaking={handleCloseStaking}
-              onLockBundle={handleLockEvidence}
+              onJudge={handleJudge}
               onRunFallback={handleRunFallback}
               onStake={handleStake}
             />

@@ -142,12 +142,17 @@ async function main() {
   carla.placeStake(mkt, carlaId.wallet, "NO", 1000n);
   await waitFor(() => alice.getView().markets.find((m) => m.id === mkt)!.stakes.length === 3, "three stakes replicated");
 
-  alice.lockMarket(mkt);
-  await waitFor(() => alice.getView().markets.find((m) => m.id === mkt)!.status === "AWAITING_EVIDENCE", "staking window closed");
-  await alice.lockBundle(mkt, BUNDLE); // → RESOLVING; each device now judges locally
+  // Full time: the creator's client auto-closes staking and freezes the whole
+  // feed as evidence — no manual close/lock step.
+  await alice.emitEvent({ minute: 90, type: "FULL_TIME", description: "Full time", source: "REPLAY" });
+  await waitFor(() => alice.getView().markets.find((m) => m.id === mkt)!.status === "RESOLVING", "match ended → market auto-locked");
+  assert(alice.getView().markets.find((m) => m.id === mkt)!.bundle != null, "the whole feed was auto-frozen as evidence at full time");
 
-  // No one calls runOracles. Each peer's autoJury casts its own verdict and the
-  // resolver announces the quorum — all driven by state replication alone.
+  // Each participant runs their OWN device's juror (the explicit per-device action);
+  // the resolver then tallies the signed verdicts and announces the quorum.
+  await alice.castJuryVerdict(mkt);
+  await bruno.castJuryVerdict(mkt);
+  await carla.castJuryVerdict(mkt);
   await waitFor(() => carla.getView().markets.find((m) => m.id === mkt)!.status === "SETTLED", "market settles on every peer");
 
   for (const [name, eng] of [["Alice", alice], ["Bruno", bruno], ["Carla", carla]] as const) {
@@ -181,6 +186,9 @@ async function main() {
   await waitFor(() => alice.getView().markets.find((m) => m.id === mkt2)!.status === "AWAITING_EVIDENCE", "round-2 staking closed");
   await alice.lockBundle(mkt2, BUNDLE);
 
+  // Only the two living peers can judge; Carla's device is off the swarm.
+  await alice.castJuryVerdict(mkt2);
+  await bruno.castJuryVerdict(mkt2);
   await waitFor(() => bruno.getView().markets.find((m) => m.id === mkt2)!.status === "SETTLED", "market resolves with a dead peer (quorum from the survivors)");
   const m2 = alice.getView().markets.find((m) => m.id === mkt2)!;
   assert(m2.status === "SETTLED", "quorum reached without the dead peer");
