@@ -150,7 +150,7 @@ async function main() {
 
   // Each participant runs their OWN device's juror (the explicit per-device action);
   // the resolver then tallies the signed verdicts and announces the quorum.
-  await alice.castJuryVerdict(mkt);
+  await alice.castJuryVerdict(mkt, "alice-brain"); // each juror runs their OWN model
   await bruno.castJuryVerdict(mkt);
   await carla.castJuryVerdict(mkt);
   await waitFor(() => carla.getView().markets.find((m) => m.id === mkt)!.status === "SETTLED", "market settles on every peer");
@@ -167,6 +167,7 @@ async function main() {
   assert(jurors.length >= 2, "at least a quorum of distinct peers signed verdicts");
   assert(new Set(jurors.map((v) => v.juror)).size === jurors.length, "one signed verdict per juror (no ballot stuffing)");
   assert(jurors.every((v) => v.bundleHash === settled.bundle!.hash), "every verdict is bound to the locked evidence hash");
+  assert(jurors.find((v) => v.juror === aliceId.wallet)?.model === "alice-brain", "each juror's own chosen model is recorded on their verdict");
   assert(settledPayouts > 0, "winners were paid out on-chain (resolver only)");
 
   const audit = alice.getAuditLog(mkt);

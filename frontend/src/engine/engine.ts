@@ -345,7 +345,7 @@ export class KickoffEngine {
    * one vote per juror and binds it to the evidence hash. Safe to call repeatedly
    * — it is a no-op once this peer has voted or while its inference is in flight.
    */
-  async castJuryVerdict(marketId: string): Promise<void> {
+  async castJuryVerdict(marketId: string, model?: string): Promise<void> {
     const room = this.state.room;
     const me = this.me;
     if (!room?.policy.jury || !me) return;
@@ -361,7 +361,9 @@ export class KickoffEngine {
     this.running.add(marketId);
     this.notify();
     try {
-      const req = { oracle: me, model: room.policy.jury.model, question: market.question, bundle: market.bundle };
+      // Each juror judges on THEIR OWN chosen model (falling back to the room
+      // default) — different brains, one verdict each, bound to the same evidence.
+      const req = { oracle: me, model: model ?? room.policy.jury.model, question: market.question, bundle: market.bundle };
       const result = await this.runtime.judge(req);
       const verdict = { ...(await toVerdict(req, result, marketId)), juror: me };
       this.juryVoted.add(marketId);

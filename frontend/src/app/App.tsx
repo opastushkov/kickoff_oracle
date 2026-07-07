@@ -913,7 +913,7 @@ function RoomScreen({
             <div className="grid grid-cols-3 divide-x" style={{ borderColor: C.hairline }}>
               {[
                 { label: "Quorum", value: `${room.policy.jury?.quorum} agreeing`, sub: "jurors to resolve" },
-                { label: "Juror model", value: room.policy.jury?.model ?? "—", sub: "runs on every device" },
+                { label: "Juror model", value: room.policy.jury?.model ?? "—", sub: "default · each device can override" },
                 { label: "Tiebreaker", value: room.policy.fallback.model, sub: "decides a split" },
               ].map((c) => (
                 <div key={c.label} className="px-5 py-3" style={{ borderColor: C.hairline }}>
@@ -1068,6 +1068,8 @@ function MarketScreen({
   me,
   marketId,
   oracleOnline,
+  jurorModel,
+  onJurorModel,
   onJudge,
   onRunFallback,
   onStake,
@@ -1077,6 +1079,8 @@ function MarketScreen({
   me: string;
   marketId: string;
   oracleOnline: boolean;
+  jurorModel: string;
+  onJurorModel: (m: string) => void;
   onJudge: () => void;
   onRunFallback: () => void;
   onStake: (side: Side, amount: bigint) => Promise<string | null>;
@@ -1305,6 +1309,11 @@ function MarketScreen({
                         <span className="text-sm font-semibold" style={{ ...fontBody, color: C.chalk }}>
                           {p.displayName}
                           {p.wallet === me && <span className="ml-1 text-xs" style={{ color: C.muted }}>(you)</span>}
+                          {v?.model && (
+                            <span className="ml-2 text-xs font-normal" style={{ ...fontMono, color: C.muted }}>
+                              {v.model}
+                            </span>
+                          )}
                         </span>
                         {v ? (
                           <span className="font-bold px-2 py-0.5 rounded" style={{ ...fontCondensed, color: vc, background: vc + "18", fontSize: 16 }}>
@@ -1323,13 +1332,20 @@ function MarketScreen({
               </div>
 
               {canJudge && (
-                <button
-                  onClick={onJudge}
-                  className="w-full py-2.5 rounded-lg text-sm font-semibold transition-all hover:opacity-90"
-                  style={{ ...fontBody, background: C.green, color: "#fff" }}
-                >
-                  ⚖ Run my juror
-                </button>
+                <div className="flex flex-col gap-2">
+                  <JurorModelPicker
+                    value={jurorModel}
+                    fallback={room.policy.jury?.model ?? "Llama 3.2 1B"}
+                    onChange={onJurorModel}
+                  />
+                  <button
+                    onClick={onJudge}
+                    className="w-full py-2.5 rounded-lg text-sm font-semibold transition-all hover:opacity-90"
+                    style={{ ...fontBody, background: C.green, color: "#fff" }}
+                  >
+                    ⚖ Run my juror
+                  </button>
+                </div>
               )}
               <div className="text-xs text-center" style={{ ...fontBody, color: C.muted }}>
                 {running ? "Your device is judging…" : idleHint}
@@ -1832,6 +1848,42 @@ function ModelSlotRow({
   );
 }
 
+/** Per-device juror model picker (UC-07): this participant's own "brain". */
+function JurorModelPicker({
+  value,
+  fallback,
+  onChange,
+}: {
+  value: string;
+  fallback: string;
+  onChange: (m: string) => void;
+}) {
+  const [models, setModels] = useState<QvacModelInfo[] | null>(null);
+  useEffect(() => {
+    let stop = false;
+    const tick = async () => {
+      const list = await listQvacModels();
+      if (!stop) setModels(list);
+    };
+    void tick();
+    const timer = setInterval(tick, 2000);
+    return () => {
+      stop = true;
+      clearInterval(timer);
+    };
+  }, []);
+  const catalog = models ?? FALLBACK_MODELS;
+  const current = value || fallback;
+  return (
+    <div>
+      <div className="text-xs uppercase tracking-widest mb-1" style={{ ...fontBody, color: C.muted }}>
+        Your juror model {value ? "" : "(room default)"}
+      </div>
+      <ModelSlotRow label="You" value={current} onChange={onChange} catalog={catalog} online={models != null} />
+    </div>
+  );
+}
+
 /** UC-01: room creation with the room-level resolution policy. */
 function CreateRoomModal({
   onClose,
@@ -2008,8 +2060,8 @@ function CreateRoomModal({
 
         <div>
           <FieldLabelHint
-            label={`Juror model ${sidecarOnline ? "(local, via QVAC)" : "(node offline — mock)"}`}
-            hint="The model each participant's device runs to judge the evidence. Bigger models judge better; download happens peer-to-peer through QVAC."
+            label={`Default juror model ${sidecarOnline ? "(local, via QVAC)" : "(node offline — mock)"}`}
+            hint="The starting model for the jury. Each participant can override it on their own device before judging — different brains, one verdict each. Bigger models judge better; download is peer-to-peer via QVAC."
           />
           <ModelSlotRow
             label="Juror"
@@ -2368,6 +2420,23 @@ export default function App() {
   const [view, setView] = useState<RoomView | null>(null);
   const [sidecarUp, setSidecarUp] = useState(false);
   const [identity, setIdentity] = useState<LocalIdentity>(() => loadOrCreateIdentity());
+  // This device's chosen juror model ("" → use the room default). Persisted so
+  // each participant keeps their own "brain" across markets.
+  const [jurorModel, setJurorModelState] = useState<string>(() => {
+    try {
+      return localStorage.getItem("kickoff.jurormodel") ?? "";
+    } catch {
+      return "";
+    }
+  });
+  const setJurorModel = (m: string) => {
+    setJurorModelState(m);
+    try {
+      localStorage.setItem("kickoff.jurormodel", m);
+    } catch {
+      /* private mode */
+    }
+  };
 
   // Sidecar present → ops replicate cross-machine over its Hyperswarm room node;
   // absent → BroadcastChannel still replicates between tabs on this machine.
@@ -2425,9 +2494,10 @@ export default function App() {
     return null;
   };
   // Staking auto-closes and evidence auto-locks at full time; each participant
-  // then runs their own device's juror on the locked feed.
+  // then runs their OWN chosen model on the locked feed.
   const handleJudge = () => {
-    void activeEngine?.castJuryVerdict(selectedMarketId);
+    const model = jurorModel || view?.room?.policy.jury?.model;
+    void activeEngine?.castJuryVerdict(selectedMarketId, model);
   };
   const handleLeaveRoom = () => {
     setActiveKey(null);
@@ -2596,6 +2666,8 @@ export default function App() {
               me={identity.wallet}
               marketId={selectedMarketId}
               oracleOnline={sidecarUp}
+              jurorModel={jurorModel}
+              onJurorModel={setJurorModel}
               onJudge={handleJudge}
               onRunFallback={handleRunFallback}
               onStake={handleStake}
