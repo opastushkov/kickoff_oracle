@@ -69,9 +69,50 @@ export async function matchTimeline(eventId) {
         detail: undefined,
       });
       bump(t.strPlayer, t.strTeam, "cards");
+    } else if (kind.includes("subst")) {
+      events.push({
+        minute,
+        type: "SUB",
+        team: t.strTeam || undefined,
+        description: `Substitution — ${t.strPlayer || "unknown"}`,
+        detail: detail || undefined,
+      });
     }
   }
   events.sort((a, b) => a.minute - b.minute);
+
+  // Real team-level match statistics (shots, possession, corners…) as evidence.
+  try {
+    const statsRes = await getJson(`${BASE}/lookupeventstats.php?id=${eventId}`);
+    const rows = statsRes?.eventstats ?? [];
+    if (rows.length > 0) {
+      const home = [];
+      const away = [];
+      for (const r of rows) {
+        if (r.intHome == null && r.intAway == null) continue;
+        home.push(`${r.strStat}: ${r.intHome}`);
+        away.push(`${r.strStat}: ${r.intAway}`);
+      }
+      if (home.length > 0) {
+        events.push({
+          minute: 90,
+          type: "STATS",
+          team: ev.strHomeTeam || undefined,
+          description: `Team stats — ${ev.strHomeTeam}`,
+          detail: home.join(" · "),
+        });
+        events.push({
+          minute: 90,
+          type: "STATS",
+          team: ev.strAwayTeam || undefined,
+          description: `Team stats — ${ev.strAwayTeam}`,
+          detail: away.join(" · "),
+        });
+      }
+    }
+  } catch {
+    /* stats are best-effort — not every match has them */
+  }
 
   // Per-player stat lines as feed events (evidence for comparative markets),
   // derived strictly from the real timeline — nothing invented.

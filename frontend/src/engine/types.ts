@@ -46,7 +46,14 @@ export interface Participant {
   joinedAt: number;
 }
 
-export type TimelineEventType = "GOAL" | "PENALTY" | "VAR" | "CARD" | "STATS" | "FULL_TIME";
+export type TimelineEventType =
+  | "GOAL"
+  | "PENALTY"
+  | "VAR"
+  | "CARD"
+  | "SUB"
+  | "STATS"
+  | "FULL_TIME";
 
 export interface TimelineEvent {
   id: string;
