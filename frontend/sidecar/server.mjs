@@ -166,6 +166,34 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  if (req.method === "GET" && req.url?.startsWith("/feed/search")) {
+    try {
+      const team = new URL(req.url, "http://x").searchParams.get("team") ?? "";
+      const { searchMatches } = await import("./feedapi.mjs");
+      const matches = await searchMatches(team);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true, matches }));
+    } catch (err) {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error: String(err?.message ?? err) }));
+    }
+    return;
+  }
+
+  if (req.method === "GET" && req.url?.startsWith("/feed/match")) {
+    try {
+      const id = new URL(req.url, "http://x").searchParams.get("id") ?? "";
+      const { matchTimeline } = await import("./feedapi.mjs");
+      const data = await matchTimeline(id);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true, ...data }));
+    } catch (err) {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error: String(err?.message ?? err) }));
+    }
+    return;
+  }
+
   if (req.method === "GET" && req.url === "/models") {
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ ok: true, models: modelStates() }));

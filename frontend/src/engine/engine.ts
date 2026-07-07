@@ -126,13 +126,20 @@ export class KickoffEngine {
 
   // ─── rooms (UC-01, UC-02) ──────────────────────────────────────────────────
 
-  createRoom(input: { name: string; matchContext: string; inviteKey: string; policy: RoomPolicy }): Room {
+  createRoom(input: {
+    name: string;
+    matchContext: string;
+    inviteKey: string;
+    policy: RoomPolicy;
+    feedMatchId?: string;
+  }): Room {
     if (!this.me) throw new Error("log in with a wallet first (UC-16)");
     const room: Room = {
       id: `room_${this.genId()}`,
       inviteKey: input.inviteKey,
       name: input.name,
       matchContext: input.matchContext,
+      feedMatchId: input.feedMatchId,
       creator: this.me,
       policy: input.policy,
     };

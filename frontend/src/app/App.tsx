@@ -23,7 +23,13 @@ import {
   X,
 } from "lucide-react";
 
-import { MATCH_FIXTURE, startMatchFeed } from "../engine/feed";
+import {
+  MATCH_FIXTURE,
+  fetchMatchFixture,
+  searchRealMatches,
+  startMatchFeed,
+  type RemoteMatch,
+} from "../engine/feed";
 import { KickoffEngine, formatUSDt, shortHash, stakeTotal } from "../engine/engine";
 import { asParticipant, loadOrCreateIdentity, shortWallet, type LocalIdentity } from "../engine/identity";
 import { MockOracleRuntime } from "../engine/oracles";
@@ -227,7 +233,7 @@ function TopBar({
 }
 
 // ─── Evidence timeline ────────────────────────────────────────────────────────
-function EvidenceTimeline({ events }: { events: TimelineEvent[] }) {
+function EvidenceTimeline({ events, label }: { events: TimelineEvent[]; label: string }) {
   const sorted = [...events].sort((a, b) => a.minute - b.minute);
   const latestId = events.reduce<TimelineEvent | null>((a, e) => (!a || e.minute >= a.minute ? e : a), null)?.id;
   const fullTime = events.some((e) => e.type === "FULL_TIME");
@@ -259,7 +265,7 @@ function EvidenceTimeline({ events }: { events: TimelineEvent[] }) {
         </span>
       </div>
       <p className="text-xs -mt-2" style={{ ...fontMono, color: C.muted }}>
-        {MATCH_FIXTURE.label}
+        {label}
       </p>
 
       {sorted.length === 0 ? (
@@ -948,7 +954,7 @@ function RoomScreen({
         </div>
 
         {/* Timeline sidebar */}
-        <EvidenceTimeline events={view.timeline} />
+        <EvidenceTimeline events={view.timeline} label={room.matchContext} />
       </div>
     </div>
   );
@@ -1496,7 +1502,7 @@ function MarketScreen({
         </div>
 
         {/* Timeline */}
-        <EvidenceTimeline events={view.timeline} />
+        <EvidenceTimeline events={view.timeline} label={room.matchContext} />
       </div>
     </div>
   );
@@ -1846,10 +1852,19 @@ function CreateRoomModal({
   onCreate,
 }: {
   onClose: () => void;
-  onCreate: (input: { name: string; matchContext: string; policy: RoomPolicy }) => void;
+  onCreate: (input: {
+    name: string;
+    matchContext: string;
+    feedMatchId?: string;
+    policy: RoomPolicy;
+  }) => void;
 }) {
   const [name, setName] = useState("My Watch Party");
   const [count, setCount] = useState(3);
+  const [matchQuery, setMatchQuery] = useState("");
+  const [matchResults, setMatchResults] = useState<RemoteMatch[]>([]);
+  const [selectedMatch, setSelectedMatch] = useState<RemoteMatch | null>(null);
+  const [searching, setSearching] = useState(false);
   const [slotModels, setSlotModels] = useState<string[]>(() => Array(3).fill("Llama 3.2 1B"));
   const [tiebreakerModel, setTiebreakerModel] = useState("Llama 3.2 1B");
   const [threshold, setThreshold] = useState(2);
@@ -1883,11 +1898,20 @@ function CreateRoomModal({
   const modelReady = !sidecarOnline || neededModels.every((n) => infoOf(n)?.loaded);
   const valid = name.trim().length > 0 && modelReady;
 
+  const doSearch = async () => {
+    if (searching || matchQuery.trim().length === 0) return;
+    setSearching(true);
+    const results = await searchRealMatches(matchQuery.trim());
+    setMatchResults(results);
+    setSearching(false);
+  };
+
   const submit = () => {
     if (!valid) return;
     onCreate({
       name: name.trim(),
-      matchContext: MATCH_FIXTURE.label,
+      matchContext: selectedMatch?.label ?? MATCH_FIXTURE.label,
+      feedMatchId: selectedMatch?.id,
       policy: {
         committee: Array.from({ length: count }, (_, i) => ({
           id: `oracle-${i + 1}`,
@@ -1908,15 +1932,62 @@ function CreateRoomModal({
         </div>
         <div>
           <FieldLabel>Match</FieldLabel>
-          <div
-            className="text-sm px-3 py-2 rounded-lg border"
-            style={{ ...fontBody, color: C.chalk, borderColor: C.hairline, background: C.bg }}
-          >
-            {MATCH_FIXTURE.label}
-            <span className="block text-xs mt-0.5" style={{ ...fontBody, color: C.muted }}>
-              Events arrive automatically from the match feed. More fixtures and live
-              feeds are coming.
-            </span>
+          <div className="flex flex-col gap-1.5">
+            <div
+              onClick={() => setSelectedMatch(null)}
+              className="px-3 py-2 rounded-lg border cursor-pointer transition-all"
+              style={{
+                borderColor: !selectedMatch ? C.green : C.hairline,
+                background: !selectedMatch ? "rgba(30,122,70,0.06)" : C.bg,
+              }}
+            >
+              <span className="text-sm" style={{ ...fontBody, color: C.chalk }}>
+                {MATCH_FIXTURE.label}
+              </span>
+              <span className="block text-xs mt-0.5" style={{ ...fontBody, color: C.muted }}>
+                Built-in demo replay — always available
+              </span>
+            </div>
+            {sidecarOnline && (
+              <>
+                <div className="flex items-center gap-2 mt-1">
+                  <input
+                    className={inputClass}
+                    style={inputStyle}
+                    placeholder="…or a real match: type a team (e.g. Arsenal, Argentina)"
+                    value={matchQuery}
+                    onChange={(e) => setMatchQuery(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && doSearch()}
+                  />
+                  <button
+                    onClick={doSearch}
+                    disabled={searching}
+                    className="px-4 py-2 rounded-lg text-sm font-semibold shrink-0 transition-all hover:opacity-90"
+                    style={{ ...fontBody, background: searching ? C.panel2 : C.teal, color: searching ? C.muted : "#fff" }}
+                  >
+                    {searching ? "Searching…" : "Search"}
+                  </button>
+                </div>
+                {matchResults.map((m) => (
+                  <div
+                    key={m.id}
+                    onClick={() => setSelectedMatch(m)}
+                    className="px-3 py-2 rounded-lg border cursor-pointer transition-all"
+                    style={{
+                      borderColor: selectedMatch?.id === m.id ? C.green : C.hairline,
+                      background: selectedMatch?.id === m.id ? "rgba(30,122,70,0.06)" : C.bg,
+                    }}
+                  >
+                    <span className="text-sm" style={{ ...fontBody, color: C.chalk }}>
+                      {m.label}
+                    </span>
+                    <span className="block text-xs mt-0.5" style={{ ...fontBody, color: C.muted }}>
+                      Real events, replayed on an accelerated clock
+                    </span>
+                  </div>
+                ))}
+              </>
+            )}
           </div>
         </div>
 
@@ -2354,7 +2425,12 @@ export default function App() {
     setScreen("market");
   };
 
-  const handleCreateRoom = async (input: { name: string; matchContext: string; policy: RoomPolicy }) => {
+  const handleCreateRoom = async (input: {
+    name: string;
+    matchContext: string;
+    feedMatchId?: string;
+    policy: RoomPolicy;
+  }) => {
     const qvac = await detectQvacRuntime();
     const key = `room_${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
     const engine = new KickoffEngine({
@@ -2365,8 +2441,10 @@ export default function App() {
     });
     engine.adoptIdentity(asParticipant(identity));
     engine.createRoom({ ...input, inviteKey: key });
-    // The creator's client drives the match feed (replay of the bound fixture).
-    feedStops.current[key] = startMatchFeed(engine);
+    // The creator's client drives the match feed: the bound real match's true
+    // timeline when one was picked, the built-in fixture otherwise.
+    const remote = input.feedMatchId ? await fetchMatchFixture(input.feedMatchId) : null;
+    feedStops.current[key] = startMatchFeed(engine, remote ?? undefined);
     setRooms((prev) => ({ ...prev, [key]: engine }));
     // Set the view synchronously — the subscription effect only re-fires when the
     // engine instance changes, so a null view could otherwise never repopulate.
@@ -2429,8 +2507,10 @@ export default function App() {
     if (!found) return false;
     engine.joinAs(guest); // announce ourselves: avatar appears on every peer
     // If we are this room's creator rejoining after a reload, resume the feed.
-    if (engine.getView().room?.creator === identity.wallet && !feedStops.current[key]) {
-      feedStops.current[key] = startMatchFeed(engine);
+    const joinedRoom = engine.getView().room;
+    if (joinedRoom?.creator === identity.wallet && !feedStops.current[key]) {
+      const remote = joinedRoom.feedMatchId ? await fetchMatchFixture(joinedRoom.feedMatchId) : null;
+      feedStops.current[key] = startMatchFeed(engine, remote ?? undefined);
     }
     setRooms((prev) => ({ ...prev, [key]: engine }));
     activateRoom(key, engine);

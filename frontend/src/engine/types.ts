@@ -34,6 +34,8 @@ export interface Room {
   inviteKey: string;
   name: string;
   matchContext: string;
+  /** Real-match binding: the feed replays this match's true timeline. */
+  feedMatchId?: string;
   creator: string; // wallet address
   policy: RoomPolicy; // immutable after ROOM_CREATE
 }

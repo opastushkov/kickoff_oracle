@@ -46,6 +46,56 @@ export const MATCH_FIXTURE: MatchFixture = {
   ],
 };
 
+export interface RemoteMatch {
+  id: string;
+  label: string;
+}
+
+/** Search real matches by team name via the sidecar's feed provider. */
+export async function searchRealMatches(
+  team: string,
+  baseUrl = "http://127.0.0.1:8791",
+): Promise<RemoteMatch[]> {
+  try {
+    const res = await fetch(`${baseUrl}/feed/search?team=${encodeURIComponent(team)}`, {
+      signal: AbortSignal.timeout(20_000),
+    });
+    const j = await res.json();
+    return j?.ok ? (j.matches as RemoteMatch[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Fetch a real match's timeline as a replayable fixture (accelerated clock). */
+export async function fetchMatchFixture(
+  matchId: string,
+  baseUrl = "http://127.0.0.1:8791",
+): Promise<MatchFixture | null> {
+  try {
+    const res = await fetch(`${baseUrl}/feed/match?id=${encodeURIComponent(matchId)}`, {
+      signal: AbortSignal.timeout(20_000),
+    });
+    const j = await res.json();
+    if (!j?.ok || !Array.isArray(j.events) || j.events.length === 0) return null;
+    return {
+      id: `api-${matchId}`,
+      label: String(j.label ?? "Real match"),
+      events: j.events.map((e: FixtureEvent, i: number) => ({
+        id: `api_${matchId}_${i}`, // deterministic → dedups across peers
+        atSeconds: 12 + i * 30,
+        minute: e.minute,
+        type: e.type,
+        team: e.team,
+        description: e.description,
+        detail: e.detail,
+      })),
+    };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Start replaying the fixture into the room. Events already present in the
  * timeline (e.g. after a creator reload) are skipped; the remaining ones play
