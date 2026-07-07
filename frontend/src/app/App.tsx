@@ -40,7 +40,13 @@ import {
   requestQvacModel,
   type QvacModelInfo,
 } from "../engine/qvac";
-import { detectWdkWallet, executeOnChainSettlement, executeStakeTransfer } from "../engine/wdk";
+import {
+  createWdkWallet,
+  detectWdkWallet,
+  executeOnChainSettlement,
+  executeStakeTransfer,
+  importWdkWallet,
+} from "../engine/wdk";
 import { saveWdkIdentity } from "../engine/identity";
 import type {
   AuditEntry,
@@ -475,14 +481,16 @@ function LandingScreen({
   onNav,
   onCreateRoom,
   onJoinRoom,
+  onLoginWallet,
   identity,
 }: {
   onNav: (s: Screen) => void;
   onCreateRoom: () => void;
   onJoinRoom: () => void;
+  onLoginWallet: () => void;
   identity: LocalIdentity;
 }) {
-  const [walletConnected, setWalletConnected] = useState(false);
+  const connected = identity.source === "wdk";
   return (
     <div className="flex flex-col" style={{ background: C.bg }}>
 
@@ -501,25 +509,25 @@ function LandingScreen({
           >
             TESTNET USDt
           </span>
-          {walletConnected ? (
-            <div
-              className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold"
+          {connected ? (
+            <button
+              onClick={onLoginWallet}
+              className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold transition-all hover:opacity-80"
               style={{ ...fontBody, background: "rgba(0,122,122,0.12)", color: C.teal, border: `1px solid ${C.teal}44` }}
+              title="Manage wallet"
             >
               <Wallet size={14} />
-              {identity.displayName} · {shortWallet(identity.wallet)}
-              {identity.source === "wdk" && (
-                <span
-                  className="ml-1 px-1.5 py-0.5 rounded text-xs font-semibold"
-                  style={{ ...fontBody, background: "rgba(0,122,122,0.15)", color: C.teal }}
-                >
-                  WDK · Sepolia
-                </span>
-              )}
-            </div>
+              {shortWallet(identity.wallet)}
+              <span
+                className="ml-1 px-1.5 py-0.5 rounded text-xs font-semibold"
+                style={{ ...fontBody, background: "rgba(0,122,122,0.15)", color: C.teal }}
+              >
+                WDK · Sepolia
+              </span>
+            </button>
           ) : (
             <button
-              onClick={() => setWalletConnected(true)}
+              onClick={onLoginWallet}
               className="flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-semibold border transition-all hover:opacity-80"
               style={{ ...fontBody, background: "transparent", color: C.teal, border: `1.5px solid ${C.teal}55` }}
             >
@@ -2155,6 +2163,184 @@ function CreateMarketModal({
   );
 }
 
+/** UC-16: self-custodial wallet onboarding — create new or import existing. */
+function WalletModal({
+  sidecarOnline,
+  current,
+  onClose,
+  onConnected,
+}: {
+  sidecarOnline: boolean;
+  current: string | null;
+  onClose: () => void;
+  onConnected: (address: string) => void;
+}) {
+  const [mode, setMode] = useState<"choose" | "create" | "import">("choose");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [seed, setSeed] = useState<string | null>(null); // shown once on create
+  const [address, setAddress] = useState<string | null>(null);
+  const [backedUp, setBackedUp] = useState(false);
+  const [importText, setImportText] = useState("");
+
+  const useDevice = async () => {
+    setBusy(true);
+    setError(null);
+    const w = await detectWdkWallet();
+    setBusy(false);
+    if (w) onConnected(w.address);
+    else setError("Couldn't read the device wallet — is the sidecar running?");
+  };
+
+  const startCreate = async () => {
+    setMode("create");
+    setBusy(true);
+    setError(null);
+    try {
+      const w = await createWdkWallet();
+      setSeed(w.seedPhrase);
+      setAddress(w.address);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doImport = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const addr = await importWdkWallet(importText);
+      onConnected(addr);
+    } catch (e) {
+      setError((e as Error).message);
+      setBusy(false);
+    }
+  };
+
+  return (
+    <ModalShell title="Your wallet" onClose={onClose}>
+      {!sidecarOnline ? (
+        <p className="text-sm leading-relaxed" style={{ ...fontBody, color: C.chalk }}>
+          A self-custodial WDK wallet needs the local sidecar running. Start it
+          (<span style={{ ...fontMono }}>start-host.cmd</span>) and reopen this. Until then
+          you play as a local guest.
+        </p>
+      ) : mode === "choose" ? (
+        <div className="flex flex-col gap-3">
+          <p className="text-xs" style={{ ...fontBody, color: C.muted }}>
+            Your identity is a self-custodial wallet — you hold the keys, on-device. Every
+            stake and payout signs from it on Sepolia.
+          </p>
+          {current && (
+            <button
+              onClick={useDevice}
+              disabled={busy}
+              className="flex items-center justify-between px-4 py-3 rounded-lg border transition-all hover:opacity-90"
+              style={{ ...fontBody, borderColor: C.teal + "55", background: "rgba(0,122,122,0.06)" }}
+            >
+              <span style={{ color: C.chalk }}>Continue with this wallet</span>
+              <span className="text-xs" style={{ ...fontMono, color: C.teal }}>{shortWallet(current)}</span>
+            </button>
+          )}
+          <button
+            onClick={useDevice}
+            disabled={busy}
+            className="px-4 py-3 rounded-lg border text-left transition-all hover:opacity-90"
+            style={{ ...fontBody, borderColor: C.hairline, color: C.chalk }}
+          >
+            Use this device's wallet
+            <span className="block text-xs" style={{ color: C.muted }}>The wallet already held by this machine's sidecar.</span>
+          </button>
+          <button
+            onClick={startCreate}
+            disabled={busy}
+            className="px-4 py-3 rounded-lg text-left transition-all hover:opacity-90"
+            style={{ ...fontBody, background: C.green, color: "#fff" }}
+          >
+            Create a new wallet
+            <span className="block text-xs" style={{ color: "rgba(255,255,255,0.8)" }}>Generate a fresh self-custodial wallet + recovery phrase.</span>
+          </button>
+          <button
+            onClick={() => { setMode("import"); setError(null); }}
+            disabled={busy}
+            className="px-4 py-3 rounded-lg border text-left transition-all hover:opacity-90"
+            style={{ ...fontBody, borderColor: C.hairline, color: C.chalk }}
+          >
+            Import existing wallet
+            <span className="block text-xs" style={{ color: C.muted }}>Paste a 12/24-word recovery phrase.</span>
+          </button>
+        </div>
+      ) : mode === "create" ? (
+        <div className="flex flex-col gap-4">
+          {busy || !seed ? (
+            <p className="text-sm" style={{ ...fontBody, color: C.muted }}>Generating your wallet…</p>
+          ) : (
+            <>
+              <div>
+                <FieldLabel>Your recovery phrase — write it down, never share it</FieldLabel>
+                <div
+                  className="p-3 rounded-lg border grid grid-cols-3 gap-2"
+                  style={{ background: C.bg, borderColor: C.amber + "66" }}
+                >
+                  {seed.split(" ").map((w, i) => (
+                    <span key={i} className="text-sm" style={{ ...fontMono, color: C.chalk }}>
+                      <span style={{ color: C.muted }}>{i + 1}.</span> {w}
+                    </span>
+                  ))}
+                </div>
+                <p className="text-xs mt-1.5" style={{ ...fontBody, color: C.amber }}>
+                  This is the only copy. Anyone with these words controls the wallet; lose
+                  them and it's gone. (Demo note: shown in-browser for convenience.)
+                </p>
+              </div>
+              <div className="text-xs" style={{ ...fontMono, color: C.muted }}>
+                Address: {address ? shortWallet(address) : "…"}
+              </div>
+              <label className="flex items-center gap-2 text-sm cursor-pointer" style={{ ...fontBody, color: C.chalk }}>
+                <input type="checkbox" checked={backedUp} onChange={(e) => setBackedUp(e.target.checked)} />
+                I've saved my recovery phrase
+              </label>
+              <button
+                onClick={() => address && onConnected(address)}
+                disabled={!backedUp || !address}
+                className="w-full py-2.5 rounded-lg text-sm font-semibold transition-all hover:opacity-90"
+                style={{ ...fontBody, background: backedUp ? C.green : C.panel2, color: backedUp ? "#fff" : C.muted }}
+              >
+                Continue
+              </button>
+            </>
+          )}
+        </div>
+      ) : (
+        <div className="flex flex-col gap-3">
+          <FieldLabel>Recovery phrase (12–24 words)</FieldLabel>
+          <textarea
+            className={`${inputClass} h-20 resize-none`}
+            style={{ ...inputStyle, ...fontMono }}
+            placeholder="word1 word2 word3 …"
+            value={importText}
+            onChange={(e) => { setImportText(e.target.value); setError(null); }}
+          />
+          <button
+            onClick={doImport}
+            disabled={busy || importText.trim().length === 0}
+            className="w-full py-2.5 rounded-lg text-sm font-semibold transition-all hover:opacity-90"
+            style={{ ...fontBody, background: busy ? C.panel2 : C.green, color: busy ? C.muted : "#fff" }}
+          >
+            {busy ? "Importing…" : "Import wallet"}
+          </button>
+          <button onClick={() => { setMode("choose"); setError(null); }} className="text-xs" style={{ ...fontBody, color: C.muted }}>
+            ← back
+          </button>
+        </div>
+      )}
+      {error && <p className="text-xs mt-3" style={{ ...fontBody, color: C.red }}>{error}</p>}
+    </ModalShell>
+  );
+}
+
 // ─── App root ─────────────────────────────────────────────────────────────────
 export default function App() {
   const [screen, setScreen] = useState<Screen>("landing");
@@ -2162,7 +2348,7 @@ export default function App() {
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [selectedMarketId, setSelectedMarketId] = useState<string>("");
   const [modal, setModal] = useState<
-    "createRoom" | "joinRoom" | "createMarket" | null
+    "createRoom" | "joinRoom" | "createMarket" | "wallet" | null
   >(null);
   const feedStops = useRef<Record<string, () => void>>({});
   const [view, setView] = useState<RoomView | null>(null);
@@ -2178,16 +2364,9 @@ export default function App() {
     let cancelled = false;
     (async () => {
       const qvac = await detectQvacRuntime();
-      if (cancelled) return;
-      setSidecarUp(qvac != null);
-      // Identity: upgrade to the real WDK wallet address BEFORE entering rooms,
-      // so every op we author carries the self-custodial address (UC-16).
-      let id = loadOrCreateIdentity();
-      if (qvac) {
-        const wallet = await detectWdkWallet();
-        if (wallet) id = saveWdkIdentity(wallet.address);
-      }
-      if (!cancelled) setIdentity(id);
+      if (!cancelled) setSidecarUp(qvac != null);
+      // Identity is explicit now: the user picks "Log in with wallet" → create or
+      // import a WDK wallet (UC-16). Until then they keep a local placeholder id.
     })();
     return () => {
       cancelled = true;
@@ -2360,6 +2539,10 @@ export default function App() {
     setSelectedMarketId(id);
     setModal(null);
   };
+  const handleWalletConnected = (address: string) => {
+    setIdentity(saveWdkIdentity(address));
+    setModal(null);
+  };
 
   return (
     <div className="min-h-screen flex flex-col" style={{ background: C.bg, fontFamily: "'Archivo', sans-serif", color: C.chalk }}>
@@ -2377,6 +2560,7 @@ export default function App() {
               onNav={handleNav}
               onCreateRoom={() => setModal("createRoom")}
               onJoinRoom={() => setModal("joinRoom")}
+              onLoginWallet={() => setModal("wallet")}
               identity={identity}
             />
           )}
@@ -2435,6 +2619,14 @@ export default function App() {
           onClose={() => setModal(null)}
           onCreate={handleCreateMarket}
           policyText={policyLabel(view)}
+        />
+      )}
+      {modal === "wallet" && (
+        <WalletModal
+          sidecarOnline={sidecarUp}
+          current={identity.source === "wdk" ? identity.wallet : null}
+          onClose={() => setModal(null)}
+          onConnected={handleWalletConnected}
         />
       )}
     </div>

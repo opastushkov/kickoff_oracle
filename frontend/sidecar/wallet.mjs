@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 const WALLET_FILE = join(dirname(fileURLToPath(import.meta.url)), ".wallet.json");
 const SEPOLIA_RPC = process.env.WDK_EVM_RPC ?? "https://ethereum-sepolia-rpc.publicnode.com";
 
-let cached = null; // { address, network }
+let cached = null; // { address, network, account }
 let initPromise = null;
 
 function pick(mod, ...names) {
@@ -20,28 +20,70 @@ function pick(mod, ...names) {
   return mod?.default ?? mod;
 }
 
-async function initWallet() {
+/** Build a live WDK account from a seed phrase (does not persist it). */
+async function buildWallet(seedPhrase) {
   const wdkMod = await import("@tetherto/wdk");
   const evmMod = await import("@tetherto/wdk-wallet-evm");
   const WDK = pick(wdkMod, "WDK");
   const WalletManagerEvm = pick(evmMod, "WalletManagerEvm");
-
-  let seedPhrase;
-  if (existsSync(WALLET_FILE)) {
-    seedPhrase = JSON.parse(readFileSync(WALLET_FILE, "utf8")).seedPhrase;
-  } else {
-    seedPhrase = WDK.getRandomSeedPhrase();
-    writeFileSync(WALLET_FILE, JSON.stringify({ seedPhrase, createdAt: Date.now() }, null, 2));
-    console.log("[wallet] new self-custodial wallet created (seed in sidecar/.wallet.json — do not commit)");
-  }
-
   const wdk = new WDK(seedPhrase);
   wdk.registerWallet("ethereum", WalletManagerEvm, { provider: SEPOLIA_RPC });
   const account = await wdk.getAccount("ethereum", 0);
   const address = await account.getAddress();
-  console.log(`[wallet] WDK account ready: ${address} (Sepolia)`);
-  cached = { address, network: "sepolia", account };
+  return { address, network: "sepolia", account };
+}
+
+function loadStoredSeed() {
+  return existsSync(WALLET_FILE) ? JSON.parse(readFileSync(WALLET_FILE, "utf8")).seedPhrase : null;
+}
+
+function saveSeed(seedPhrase, how) {
+  writeFileSync(WALLET_FILE, JSON.stringify({ seedPhrase, createdAt: Date.now() }, null, 2));
+  console.log(`[wallet] wallet ${how} (seed in sidecar/.wallet.json — do not commit)`);
+}
+
+/** Load the stored wallet, or auto-create one on first ever run. */
+async function initWallet() {
+  const wdkMod = await import("@tetherto/wdk");
+  const WDK = pick(wdkMod, "WDK");
+  let seedPhrase = loadStoredSeed();
+  if (!seedPhrase) {
+    seedPhrase = WDK.getRandomSeedPhrase();
+    saveSeed(seedPhrase, "auto-created");
+  }
+  cached = await buildWallet(seedPhrase);
+  console.log(`[wallet] WDK account ready: ${cached.address} (Sepolia)`);
   return cached;
+}
+
+/** Rebind the sidecar to a wallet built from `seedPhrase` and persist it. */
+async function useSeed(seedPhrase, how) {
+  const w = await buildWallet(seedPhrase); // throws on an invalid phrase
+  saveSeed(seedPhrase, how);
+  cached = w;
+  initPromise = Promise.resolve(w);
+  console.log(`[wallet] active wallet is now ${w.address} (Sepolia)`);
+  return w.address;
+}
+
+/** Create a brand-new self-custodial wallet; returns the seed to back up. */
+export async function createWallet() {
+  const wdkMod = await import("@tetherto/wdk");
+  const WDK = pick(wdkMod, "WDK");
+  const seedPhrase = WDK.getRandomSeedPhrase();
+  const address = await useSeed(seedPhrase, "created");
+  return { address, seedPhrase };
+}
+
+/** Import an existing wallet from a user-supplied seed phrase. */
+export async function importWallet(seedPhrase) {
+  const phrase = String(seedPhrase ?? "").trim().replace(/\s+/g, " ");
+  const words = phrase.split(" ").filter(Boolean).length;
+  if (words !== 12 && words !== 15 && words !== 18 && words !== 21 && words !== 24) {
+    throw new Error("seed phrase must be 12, 15, 18, 21, or 24 words");
+  }
+  const address = await useSeed(phrase, "imported");
+  return { address };
 }
 
 // 1 test-USDt minor unit (cent) → wei. Default: 1 cent = 1e12 wei, so a

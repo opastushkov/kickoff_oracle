@@ -59,6 +59,32 @@ export async function executeOnChainSettlement(
   }
 }
 
+/** Create a brand-new self-custodial wallet; returns its address + the seed to back up. */
+export async function createWdkWallet(
+  baseUrl = "http://127.0.0.1:8791",
+): Promise<{ address: string; seedPhrase: string }> {
+  const res = await fetch(`${baseUrl}/wallet/create`, { method: "POST", signal: AbortSignal.timeout(30_000) });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok || !j.ok) throw new Error(String(j.error ?? `create failed (${res.status})`));
+  return { address: String(j.address), seedPhrase: String(j.seedPhrase) };
+}
+
+/** Import an existing wallet from a seed phrase; returns its address. */
+export async function importWdkWallet(
+  seedPhrase: string,
+  baseUrl = "http://127.0.0.1:8791",
+): Promise<string> {
+  const res = await fetch(`${baseUrl}/wallet/import`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ seedPhrase }),
+    signal: AbortSignal.timeout(30_000),
+  });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok || !j.ok) throw new Error(String(j.error ?? `import failed (${res.status})`));
+  return String(j.address);
+}
+
 export async function detectWdkWallet(
   baseUrl = "http://127.0.0.1:8791",
 ): Promise<WdkWalletInfo | null> {

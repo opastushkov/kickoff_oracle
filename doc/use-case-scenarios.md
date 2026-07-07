@@ -417,7 +417,7 @@ match feed (UC-05); the old demo seed survives solely as an engine test fixture
 
 ## UC-16 — Log in with a Tether wallet
 
-**Primary actors:** Participant, Settlement engine (WDK) · **Status: Real** (first cut: identity is a real WDK self-custodial wallet — seed generated and held locally by the sidecar via `@tetherto/wdk`, EVM address on Sepolia; every op the user authors carries that address. Local placeholder identity without the sidecar. Remaining: on-chain test-USDt settlement transfers — room balances are still the engine ledger)
+**Primary actors:** Participant, Settlement engine (WDK) · **Status: Real** ("Log in with wallet" opens a self-custodial onboarding modal: **create a new wallet** (the sidecar generates a BIP-39 seed via `@tetherto/wdk`, the UI shows the recovery phrase for the user to back up before continuing), **import an existing wallet** (paste a 12–24-word phrase — re-derives the same address deterministically), or **use this device's wallet**. The chosen wallet's Sepolia address becomes the identity every op is authored under, and stakes/payouts sign from it on-chain. Seed is held only on-device in `sidecar/.wallet.json`; without the sidecar the user plays as a local guest.)
 
 **Goal:** Authenticate with a Tether wallet so identity, stakes, and payouts are bound to a
 real wallet address instead of an ad-hoc demo profile.

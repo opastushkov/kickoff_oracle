@@ -139,6 +139,39 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  if (req.method === "POST" && req.url === "/wallet/create") {
+    try {
+      const { createWallet } = await import("./wallet.mjs");
+      const out = await createWallet();
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true, ...out }));
+    } catch (err) {
+      console.error("[wallet] create error:", err?.message ?? err);
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error: String(err?.message ?? err) }));
+    }
+    return;
+  }
+
+  if (req.method === "POST" && req.url === "/wallet/import") {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", async () => {
+      try {
+        const { seedPhrase } = JSON.parse(body);
+        const { importWallet } = await import("./wallet.mjs");
+        const out = await importWallet(seedPhrase);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true, ...out }));
+      } catch (err) {
+        console.error("[wallet] import error:", err?.message ?? err);
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: false, error: String(err?.message ?? err) }));
+      }
+    });
+    return;
+  }
+
   if (req.method === "POST" && req.url === "/wallet/settle") {
     let body = "";
     req.on("data", (c) => (body += c));
