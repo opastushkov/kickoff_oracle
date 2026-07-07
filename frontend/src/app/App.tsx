@@ -84,18 +84,11 @@ const STATUS_LABEL: Record<string, string> = {
   SETTLED: "SETTLED",
   CANCELLED: "CANCELLED",
 };
-/** "3 × Llama 3.2 1B" when the committee shares one model, else a list. */
-function committeeSummary(committee: { id: string; model: string }[]): string {
-  const models = [...new Set(committee.map((c) => c.model))];
-  return models.length === 1
-    ? `${committee.length} × ${models[0]}`
-    : committee.map((c) => `${c.id} (${c.model})`).join(" / ");
-}
-
 function policyLabel(view: RoomView): string {
-  const p = view.room?.policy;
-  if (!p) return "";
-  return `${p.threshold}-of-${p.committee.length} LLM consensus · Fallback: Tiebreaker LLM`;
+  const j = view.room?.policy.jury;
+  const fb = view.room?.policy.fallback.model;
+  if (!j) return "";
+  return `Distributed jury · quorum ${j.quorum} · juror ${j.model} · tiebreaker ${fb}`;
 }
 function nameOf(view: RoomView, wallet: string): string {
   return view.participants.find((p) => p.wallet === wallet)?.displayName ?? wallet;
@@ -908,9 +901,8 @@ function RoomScreen({
               Room resolution policy
             </span>
             <span className="text-xs" style={{ ...fontMono, color: C.chalk }}>
-              {room.policy.threshold}-of-{room.policy.committee.length} threshold ·{" "}
-              {committeeSummary(room.policy.committee)} · Fallback: Tiebreaker LLM (
-              {room.policy.fallback.model})
+              Distributed jury — every device votes · quorum {room.policy.jury?.quorum} ·
+              juror {room.policy.jury?.model} · tiebreaker {room.policy.fallback.model}
             </span>
             <span className="ml-auto text-xs shrink-0" style={{ ...fontBody, color: C.muted }}>
               Set by room creator
@@ -1058,7 +1050,6 @@ function MarketScreen({
   oracleOnline,
   onCloseStaking,
   onLockBundle,
-  onRun,
   onRunFallback,
   onStake,
 }: {
@@ -1069,7 +1060,6 @@ function MarketScreen({
   oracleOnline: boolean;
   onCloseStaking: () => void;
   onLockBundle: () => void;
-  onRun: () => void;
   onRunFallback: () => void;
   onStake: (side: Side, amount: bigint) => Promise<string | null>;
 }) {
@@ -1108,21 +1098,20 @@ function MarketScreen({
   }
 
   const isCreator = room.creator === me;
-  const running = view.runningOracles.includes(market.id);
+  const running = view.runningOracles.includes(market.id); // this device is judging
   const done = market.resolution != null;
-  const committee = room.policy.committee;
-  const committeeVerdicts = market.verdicts.filter((v) => v.oracle !== "TIEBREAKER");
-  const canRun =
-    market.status === "RESOLVING" && market.bundle != null && !running && !done && oracleOnline;
+  const quorum = room.policy.jury?.quorum ?? 1;
+  const jurorVerdicts = market.verdicts.filter((v) => v.juror);
+  const yesVotes = jurorVerdicts.filter((v) => v.verdict === "YES").length;
+  const noVotes = jurorVerdicts.filter((v) => v.verdict === "NO").length;
+  const tiebreaker = market.verdicts.find((v) => v.oracle === "TIEBREAKER");
   const idleHint = !oracleOnline
-    ? "Oracle node offline — start the sidecar to run oracles"
+    ? "Oracle node offline — start the sidecar so this device can judge"
     : market.status === "OPEN"
-      ? "Close staking, then attach evidence to enable the oracles"
+      ? "Close staking, then attach evidence to start the jury"
       : market.status === "AWAITING_EVIDENCE"
-        ? "Attach evidence and lock the bundle to enable the oracles"
-        : !market.bundle
-          ? "Lock an evidence bundle to enable the oracles"
-          : "Run oracles to see consensus";
+        ? "Attach evidence and lock the bundle to start the jury"
+        : "Each device judges the locked evidence and signs one verdict";
 
   return (
     <div className="flex-1 flex flex-col" style={{ background: C.bg }}>
@@ -1299,109 +1288,71 @@ function MarketScreen({
               )}
             </div>
 
-            {/* B. Oracle committee */}
+            {/* B. Distributed jury — each device signs one verdict */}
             <div className="flex flex-col gap-3">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold uppercase tracking-wide" style={{ ...fontBody, color: C.chalk }}>Oracle committee</span>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={onRun}
-                    disabled={!canRun}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-all"
-                    style={{
-                      ...fontBody,
-                      background: !canRun ? C.panel2 : C.green,
-                      color: done ? C.green : running ? C.amber : !canRun ? C.muted : "#fff",
-                      cursor: !canRun ? "default" : "pointer",
-                    }}
-                  >
-                    {done ? (
-                      <>
-                        <Check size={10} />
-                        Oracles revealed
-                      </>
-                    ) : running ? (
-                      <>
-                        <span className="animate-spin inline-block w-2 h-2 border border-amber-400 rounded-full border-t-transparent" />
-                        Running…
-                      </>
-                    ) : (
-                      <>
-                        <Play size={10} />
-                        Run oracles
-                      </>
-                    )}
-                  </button>
-                </div>
+                <span className="text-xs font-semibold uppercase tracking-wide" style={{ ...fontBody, color: C.chalk }}>Distributed jury</span>
+                <span className="text-xs px-2 py-0.5 rounded" style={{ ...fontBody, background: C.panel2, color: C.muted }}>
+                  quorum {quorum}
+                </span>
               </div>
 
-              <div className="flex flex-col gap-3">
-                {committee.map((cfg, i) => {
-                  const verdict = committeeVerdicts.find((v) => v.oracle === cfg.id);
-                  const state: OracleState = verdict ? "revealed" : running ? "analyzing" : "idle";
+              <div className="flex flex-col gap-2">
+                {view.participants.map((p) => {
+                  const v = jurorVerdicts.find((x) => x.juror === p.wallet);
+                  const judging = running && p.wallet === me && !v;
+                  const vc = !v ? C.muted : v.verdict === "YES" ? C.green : v.verdict === "NO" ? C.red : C.amber;
                   return (
-                    <OracleCard
-                      key={cfg.id}
-                      name={`Oracle ${i + 1}`}
-                      icon={Gavel}
-                      verdict={verdict?.verdict ?? "INSUFFICIENT_EVIDENCE"}
-                      confidence={verdict?.confidence ?? 0}
-                      reason={verdict?.reason ?? ""}
-                      state={state}
-                      delay={i * 0.15}
-                      model={verdict?.model ?? cfg.model}
-                    />
+                    <div key={p.wallet} className="p-3 rounded-lg border" style={{ background: C.panel, borderColor: v ? vc + "44" : C.hairline }}>
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-semibold" style={{ ...fontBody, color: C.chalk }}>
+                          {p.displayName}
+                          {p.wallet === me && <span className="ml-1 text-xs" style={{ color: C.muted }}>(you)</span>}
+                        </span>
+                        {v ? (
+                          <span className="font-bold px-2 py-0.5 rounded" style={{ ...fontCondensed, color: vc, background: vc + "18", fontSize: 16 }}>
+                            {v.verdict === "INSUFFICIENT_EVIDENCE" ? "INSUFF" : v.verdict}
+                          </span>
+                        ) : judging ? (
+                          <span className="text-xs animate-pulse" style={{ ...fontBody, color: C.amber }}>judging…</span>
+                        ) : (
+                          <span className="text-xs" style={{ ...fontBody, color: C.muted }}>waiting</span>
+                        )}
+                      </div>
+                      {v?.reason && <p className="text-xs mt-1 leading-snug" style={{ ...fontBody, color: C.muted }}>{v.reason}</p>}
+                    </div>
                   );
                 })}
               </div>
 
               <div className="text-xs text-center" style={{ ...fontBody, color: C.muted }}>
-                {view.oracleRuntime}
+                {market.bundle ? view.oracleRuntime : idleHint}
               </div>
             </div>
 
-            {/* C. Consensus result */}
+            {/* C. Jury result */}
             <div className="p-5 rounded-lg border flex flex-col gap-4" style={{ background: C.panel, borderColor: C.hairline }}>
-              <span className="text-xs font-semibold uppercase tracking-wide" style={{ ...fontBody, color: C.chalk }}>Consensus result</span>
+              <span className="text-xs font-semibold uppercase tracking-wide" style={{ ...fontBody, color: C.chalk }}>Jury result</span>
 
-              {/* Threshold meter */}
               <div className="flex flex-col gap-3">
                 <div className="text-xs" style={{ ...fontBody, color: C.muted }}>
-                  Threshold: {room.policy.threshold} of {committee.length}
+                  {quorum} agreeing {quorum === 1 ? "juror" : "jurors"} resolves the market
                 </div>
-                <div className="flex items-center gap-2">
-                  {committee.map((cfg, i) => {
-                    const v = committeeVerdicts[i];
-                    const color = !v ? null : v.verdict === "YES" ? C.green : v.verdict === "NO" ? C.red : C.amber;
-                    return (
-                      <motion.div
-                        key={cfg.id}
-                        className="flex-1 h-10 rounded flex items-center justify-center"
-                        style={{
-                          background: color ? color + "33" : C.panel2,
-                          border: `2px solid ${color ?? C.hairline}`,
-                        }}
-                        animate={v ? { scale: [1, 1.04, 1] } : {}}
-                        transition={{ delay: i * 0.2 }}
-                      >
-                        {v && (
-                          <span style={{ ...fontCondensed, color: color!, fontSize: 20, fontWeight: 700 }}>
-                            {v.verdict === "INSUFFICIENT_EVIDENCE" ? "INSUFF" : v.verdict}
-                          </span>
-                        )}
-                      </motion.div>
-                    );
-                  })}
+                <div className="flex items-center gap-3">
+                  <div className="flex-1 flex flex-col items-center p-2 rounded" style={{ background: C.green + "18" }}>
+                    <span style={{ ...fontCondensed, color: C.green, fontSize: 24 }}>{yesVotes}</span>
+                    <span className="text-xs" style={{ ...fontBody, color: C.green }}>YES</span>
+                  </div>
+                  <div className="flex-1 flex flex-col items-center p-2 rounded" style={{ background: C.red + "18" }}>
+                    <span style={{ ...fontCondensed, color: C.red, fontSize: 24 }}>{noVotes}</span>
+                    <span className="text-xs" style={{ ...fontBody, color: C.red }}>NO</span>
+                  </div>
                 </div>
 
                 {done && market.resolution!.via === "CONSENSUS" && (
-                  <motion.div
-                    initial={{ opacity: 0, y: 4 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className="text-center"
-                  >
-                    <div className="font-bold" style={{ ...fontCondensed, color: C.green, fontSize: 28 }}>
-                      {room.policy.threshold} OF {committee.length} REACHED
+                  <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} className="text-center">
+                    <div className="font-bold" style={{ ...fontCondensed, color: C.green, fontSize: 26 }}>
+                      QUORUM REACHED
                     </div>
                   </motion.div>
                 )}
@@ -1418,7 +1369,8 @@ function MarketScreen({
                     Market resolved: {market.resolution!.outcome}
                   </div>
                   <div className="text-xs" style={{ ...fontBody, color: C.muted }}>
-                    YES votes: {market.resolution!.counts.yes} · NO votes: {market.resolution!.counts.no} ·
+                    {market.resolution!.via === "TIEBREAKER" ? "Decided by the tiebreaker after a split · " : ""}
+                    YES: {market.resolution!.counts.yes} · NO: {market.resolution!.counts.no} ·
                     Insufficient: {market.resolution!.counts.insufficient}
                   </div>
                 </motion.div>
@@ -1430,25 +1382,22 @@ function MarketScreen({
                   style={{ background: "rgba(212,160,23,0.1)", border: `1px solid ${C.amber}55` }}
                 >
                   <div className="font-bold mb-1" style={{ ...fontCondensed, color: C.amber, fontSize: 20 }}>
-                    No consensus — fallback: Tiebreaker LLM
+                    No quorum — tiebreaker deciding
                   </div>
-                  <p className="text-xs mb-3" style={{ ...fontBody, color: C.muted }}>
-                    A separate tiebreaker oracle ({room.policy.fallback.model}) judges the
-                    same locked evidence bundle.
+                  <p className="text-xs" style={{ ...fontBody, color: C.muted }}>
+                    The jury split, so a tiebreaker judge ({room.policy.fallback.model})
+                    rules on the same locked evidence. {tiebreaker ? "" : "Running…"}
                   </p>
-                  <button
-                    onClick={onRunFallback}
-                    disabled={running}
-                    className="w-full py-2 rounded-lg text-sm font-medium transition-all hover:opacity-80"
-                    style={{
-                      ...fontBody,
-                      background: running ? C.panel2 : C.amber,
-                      color: running ? C.muted : "#fff",
-                      cursor: running ? "default" : "pointer",
-                    }}
-                  >
-                    {running ? "Tiebreaker analyzing…" : "Run fallback"}
-                  </button>
+                  {isCreator && (
+                    <button
+                      onClick={onRunFallback}
+                      disabled={running}
+                      className="w-full mt-2 py-1.5 rounded-lg text-xs font-medium transition-all hover:opacity-80"
+                      style={{ ...fontBody, background: running ? C.panel2 : C.amber, color: running ? C.muted : "#fff" }}
+                    >
+                      {running ? "Tiebreaker analyzing…" : "Run tiebreaker now"}
+                    </button>
+                  )}
                 </div>
               )}
 
@@ -1860,14 +1809,13 @@ function CreateRoomModal({
   }) => void;
 }) {
   const [name, setName] = useState("My Watch Party");
-  const [count, setCount] = useState(3);
   const [matchQuery, setMatchQuery] = useState("");
   const [matchResults, setMatchResults] = useState<RemoteMatch[]>([]);
   const [selectedMatch, setSelectedMatch] = useState<RemoteMatch | null>(null);
   const [searching, setSearching] = useState(false);
-  const [slotModels, setSlotModels] = useState<string[]>(() => Array(3).fill("Llama 3.2 1B"));
+  const [jurorModel, setJurorModel] = useState("Llama 3.2 1B");
   const [tiebreakerModel, setTiebreakerModel] = useState("Llama 3.2 1B");
-  const [threshold, setThreshold] = useState(2);
+  const [quorum, setQuorum] = useState(2);
   const [models, setModels] = useState<QvacModelInfo[] | null>(null);
 
   // Poll the sidecar's model catalog while the modal is open so download
@@ -1890,11 +1838,10 @@ function CreateRoomModal({
   const sidecarOnline = models != null;
   const infoOf = (n: string) => catalog.find((m) => m.name === n);
 
-  const MAX_ORACLES = 5;
-  const effThreshold = Math.min(Math.max(threshold, 1), count);
-  // Without a sidecar the mock runtime serves any name; with one, every model
-  // used by the committee (and the tiebreaker) must be downloaded first.
-  const neededModels = [...new Set([...slotModels.slice(0, count), tiebreakerModel])];
+  const MAX_QUORUM = 5;
+  // Without a sidecar the mock runtime serves any name; with one, the juror
+  // model and the tiebreaker model must be downloaded first.
+  const neededModels = [...new Set([jurorModel, tiebreakerModel])];
   const modelReady = !sidecarOnline || neededModels.every((n) => infoOf(n)?.loaded);
   const valid = name.trim().length > 0 && modelReady;
 
@@ -1913,12 +1860,10 @@ function CreateRoomModal({
       matchContext: selectedMatch?.label ?? MATCH_FIXTURE.label,
       feedMatchId: selectedMatch?.id,
       policy: {
-        committee: Array.from({ length: count }, (_, i) => ({
-          id: `oracle-${i + 1}`,
-          model: slotModels[i] ?? slotModels[0] ?? "Llama 3.2 1B",
-        })),
-        threshold: effThreshold,
+        committee: [], // jury mode: no fixed committee — every device is a juror
+        threshold: quorum,
         fallback: { kind: "TIEBREAKER_LLM", model: tiebreakerModel },
+        jury: { quorum, model: jurorModel },
       },
     });
   };
@@ -1991,86 +1936,48 @@ function CreateRoomModal({
           </div>
         </div>
 
-        <div className="flex gap-6">
-          <div>
-            <FieldLabel>Oracles on the committee</FieldLabel>
-            <div className="flex items-center gap-3">
-              <button
-                onClick={() => setCount((n) => Math.max(1, n - 1))}
-                className="w-8 h-8 rounded-lg border text-lg font-bold"
-                style={{ ...fontBody, color: C.chalk, borderColor: C.hairline }}
-              >
-                −
-              </button>
-              <span className="text-sm font-semibold" style={{ ...fontMono, color: C.chalk }}>
-                {count}
-              </span>
-              <button
-                onClick={() =>
-                  setCount((n) => {
-                    const next = Math.min(MAX_ORACLES, n + 1);
-                    setSlotModels((prev) =>
-                      prev.length < next ? [...prev, prev[prev.length - 1] ?? "Llama 3.2 1B"] : prev,
-                    );
-                    return next;
-                  })
-                }
-                className="w-8 h-8 rounded-lg border text-lg font-bold"
-                style={{ ...fontBody, color: C.chalk, borderColor: C.hairline }}
-              >
-                +
-              </button>
-            </div>
+        <div>
+          <FieldLabel>Jury quorum — agreeing jurors that resolve a market</FieldLabel>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setQuorum((q) => Math.max(1, q - 1))}
+              className="w-8 h-8 rounded-lg border text-lg font-bold"
+              style={{ ...fontBody, color: C.chalk, borderColor: C.hairline }}
+            >
+              −
+            </button>
+            <span className="text-sm font-semibold" style={{ ...fontMono, color: C.chalk }}>
+              {quorum} {quorum === 1 ? "juror" : "jurors"}
+            </span>
+            <button
+              onClick={() => setQuorum((q) => Math.min(MAX_QUORUM, q + 1))}
+              className="w-8 h-8 rounded-lg border text-lg font-bold"
+              style={{ ...fontBody, color: C.chalk, borderColor: C.hairline }}
+            >
+              +
+            </button>
           </div>
-          <div>
-            <FieldLabel>Consensus threshold</FieldLabel>
-            <div className="flex items-center gap-3">
-              <button
-                onClick={() => setThreshold((t) => Math.max(1, t - 1))}
-                className="w-8 h-8 rounded-lg border text-lg font-bold"
-                style={{ ...fontBody, color: C.chalk, borderColor: C.hairline }}
-              >
-                −
-              </button>
-              <span className="text-sm font-semibold" style={{ ...fontMono, color: C.chalk }}>
-                {effThreshold} of {count}
-              </span>
-              <button
-                onClick={() => setThreshold((t) => Math.min(count, t + 1))}
-                className="w-8 h-8 rounded-lg border text-lg font-bold"
-                style={{ ...fontBody, color: C.chalk, borderColor: C.hairline }}
-              >
-                +
-              </button>
-            </div>
-          </div>
+          <p className="text-xs mt-1" style={{ ...fontBody, color: C.muted }}>
+            Every participant's device runs the juror model and signs one verdict; the
+            market resolves once this many agree. Solo demo → set 1.
+          </p>
         </div>
 
         <div>
           <FieldLabel>
-            Oracle models {sidecarOnline ? "(local, via QVAC)" : "(oracle node offline — mock verdicts)"}
+            Juror model — runs on every device {sidecarOnline ? "(local, via QVAC)" : "(oracle node offline — mock verdicts)"}
           </FieldLabel>
-          <div className="flex flex-col gap-2">
-            {Array.from({ length: count }, (_, i) => (
-              <ModelSlotRow
-                key={i}
-                label={`Oracle ${i + 1}`}
-                value={slotModels[i] ?? "Llama 3.2 1B"}
-                onChange={(v) => setSlotModels((prev) => prev.map((x, j) => (j === i ? v : x)))}
-                catalog={catalog}
-                online={sidecarOnline}
-              />
-            ))}
-          </div>
-          {sidecarOnline && !modelReady && (
-            <p className="text-xs mt-1.5" style={{ ...fontBody, color: C.amber }}>
-              Some selected models aren't on this machine yet — download them to create the room.
-            </p>
-          )}
+          <ModelSlotRow
+            label="Juror"
+            value={jurorModel}
+            onChange={setJurorModel}
+            catalog={catalog}
+            online={sidecarOnline}
+          />
         </div>
 
         <div>
-          <FieldLabel>No-consensus tiebreaker</FieldLabel>
+          <FieldLabel>Tiebreaker model — decides a split jury</FieldLabel>
           <div className="mb-2">
             <ModelSlotRow
               label="Tiebreaker"
@@ -2081,10 +1988,15 @@ function CreateRoomModal({
             />
           </div>
           <p className="text-xs" style={{ ...fontBody, color: C.muted }}>
-            Split committee → a separate tiebreaker oracle judges the same locked evidence;
-            if it also finds the evidence insufficient, the market cancels and stakes are
-            refunded.
+            If the jury never reaches quorum, a tiebreaker judge rules on the same locked
+            evidence; if it too finds the evidence insufficient, the market cancels and
+            stakes are refunded.
           </p>
+          {sidecarOnline && !modelReady && (
+            <p className="text-xs mt-1.5" style={{ ...fontBody, color: C.amber }}>
+              The juror or tiebreaker model isn't on this machine yet — download it to create the room.
+            </p>
+          )}
         </div>
 
         <div className="pt-2 border-t" style={{ borderColor: C.hairline }}>
@@ -2378,9 +2290,8 @@ export default function App() {
 
   const ready = activeEngine != null && view?.room != null;
 
-  const handleRun = () => {
-    void activeEngine?.runOracles(selectedMarketId);
-  };
+  // Jury mode auto-drives verdicts + resolution; the tiebreaker is a manual
+  // safety nudge for the creator on a split that hasn't auto-resolved.
   const handleRunFallback = () => {
     void activeEngine?.runFallback(selectedMarketId);
   };
@@ -2438,6 +2349,7 @@ export default function App() {
       runtimeLabel: qvac ? "Runs locally via QVAC — models chosen per room · no cloud" : undefined,
       adapter: makeAdapter(key, qvac != null),
       onSettlement: qvac ? executeOnChainSettlement : undefined,
+      autoJury: true, // this device auto-casts its juror verdict; creator tallies quorum
     });
     engine.adoptIdentity(asParticipant(identity));
     engine.createRoom({ ...input, inviteKey: key });
@@ -2486,6 +2398,7 @@ export default function App() {
       runtimeLabel: "Runs locally via QVAC — models chosen per room · no cloud",
       adapter: makeAdapter(key, true),
       onSettlement: executeOnChainSettlement,
+      autoJury: true, // this device auto-casts its juror verdict
     });
     const guest = asParticipant(identity);
     engine.adoptIdentity(guest);
@@ -2570,7 +2483,6 @@ export default function App() {
               oracleOnline={sidecarUp}
               onCloseStaking={handleCloseStaking}
               onLockBundle={() => setModal("lockBundle")}
-              onRun={handleRun}
               onRunFallback={handleRunFallback}
               onStake={handleStake}
             />

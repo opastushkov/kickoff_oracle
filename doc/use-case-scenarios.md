@@ -211,9 +211,14 @@ permitted.
 
 ---
 
-## UC-07 — Run the oracle committee
+## UC-07 — The distributed jury judges the evidence
 
-**Primary actors:** Participant (trigger), Oracle committee (QVAC) · **Status: Real** (verdicts come from a local LLM — Llama 3.2 1B via the QVAC sidecar — with one neutral instruction for every oracle and JSON-constrained output; independence comes from separate inference runs. Scripted mock fallback when the sidecar is not running)
+**Primary actors:** Every participant's device (juror), QVAC · **Status: Real** (the resolution flow is a **distributed jury** — the only mode: when the evidence bundle locks, *each* participant's own device runs the juror model over the locked evidence and signs one verdict bound to the evidence hash. The market resolves once **quorum** jurors agree on a side; the room creator tallies the replicated signed verdicts and publishes the resolution, which any peer can verify. No committee runs on a single node. If the jury never reaches quorum, a tiebreaker LLM decides — or the market cancels with refunds. Verdicts come from a local LLM via the QVAC sidecar; scripted mock fallback without it. The committee-on-one-node path remains in the engine as internal legacy but is not user-reachable.)
+
+> Set the quorum, juror model, and tiebreaker model at room creation (UC-01). Each
+> device auto-casts its verdict on a locked market; the market screen shows every juror
+> voting live and a quorum meter. Verified by `pnpm jury:test` (three peers, one dropping
+> off mid-tournament, quorum still reached).
 
 **Goal:** Have three independent local AI oracles review the locked evidence and issue
 verdicts.
