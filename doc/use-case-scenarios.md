@@ -181,7 +181,7 @@ as market evidence.
 
 ## UC-06 — Assemble and lock an evidence bundle
 
-**Primary actors:** Room creator, System · **Status: Real** (the creator assembles the bundle in the "Attach evidence & lock bundle" modal — timeline events as PRIMARY, a manual note as SECONDARY, a rulebook excerpt as CONTEXT — and the engine canonical-JSON-hashes and locks it; re-locking is rejected by the reducer)
+**Primary actors:** Room creator, System · **Status: Real** (the creator selects feed events — goals, cards, penalties, per-player stat lines — in the "Attach evidence & lock bundle" modal; the engine canonical-JSON-hashes and locks the bundle; re-locking is rejected by the reducer. Evidence is feed-only by design: participants cannot author facts. Manual notes and rulebook excerpts remain in the data model but are hidden from the UI for now)
 
 **Goal:** Fix the exact evidence the oracles will judge, so the verdict is verifiable and
 cannot be gamed by re-rolling evidence.

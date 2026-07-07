@@ -37,7 +37,12 @@ export const MATCH_FIXTURE: MatchFixture = {
     { id: "feed_ukresp_04", atSeconds: 185, minute: 55, type: "CARD", team: "Ukraine", description: "Second yellow → red card — Ukraine defender", detail: "Shirt pull stopped a break" },
     { id: "feed_ukresp_05", atSeconds: 245, minute: 67, type: "PENALTY", team: "Ukraine", description: "Penalty — Ukraine", detail: "VAR confirmed" },
     { id: "feed_ukresp_06", atSeconds: 305, minute: 78, type: "GOAL", team: "Spain", description: "Goal — Spain", detail: "Free kick, top corner" },
-    { id: "feed_ukresp_07", atSeconds: 365, minute: 90, type: "FULL_TIME", description: "Full time", detail: "Spain 2 — 1 Ukraine" },
+    // Player stat lines arrive as feed events too — evidence for comparative
+    // markets ("did A play better than B?") comes from the feed, never typed.
+    { id: "feed_ukresp_07", atSeconds: 350, minute: 90, type: "STATS", team: "Ukraine", description: "Player stats — Melnyk (UKR #10)", detail: "1 goal · 4 shots (2 on target) · 5 dribbles won · 81% passing · 2 key passes" },
+    { id: "feed_ukresp_08", atSeconds: 356, minute: 90, type: "STATS", team: "Spain", description: "Player stats — Ortega (ESP #21)", detail: "1 goal · 3 shots (2 on target) · 2 dribbles won · 90% passing · 4 duels won" },
+    { id: "feed_ukresp_09", atSeconds: 362, minute: 90, type: "STATS", team: "Spain", description: "Player stats — Ruiz (ESP #6)", detail: "0 goals · 7 tackles · 3 interceptions · 94% passing · 11 duels won" },
+    { id: "feed_ukresp_10", atSeconds: 370, minute: 90, type: "FULL_TIME", description: "Full time", detail: "Spain 2 — 1 Ukraine" },
   ],
 };
 

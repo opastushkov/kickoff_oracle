@@ -1272,8 +1272,8 @@ function MarketScreen({
               ) : (
                 <>
                   <p className="text-xs leading-relaxed" style={{ ...fontBody, color: C.muted }}>
-                    The room creator assembles the bundle from timeline events, notes, and
-                    rulebook excerpts. It is hashed and locked before any oracle sees it.
+                    The room creator selects feed events — goals, cards, penalties, player
+                    stats — as the bundle. It is hashed and locked before any oracle sees it.
                   </p>
                   {isCreator && market.status === "AWAITING_EVIDENCE" && (
                     <button
@@ -2171,15 +2171,13 @@ function CreateMarketModal({
   );
 }
 
-/** UC-06: the room creator assembles and permanently locks the evidence bundle. */
+/** UC-06: the room creator locks the evidence bundle — feed events only. */
 function LockBundleModal({
   view,
-  me,
   onClose,
   onLock,
 }: {
   view: RoomView;
-  me: string;
   onClose: () => void;
   onLock: (items: EvidenceItem[]) => void;
 }) {
@@ -2187,9 +2185,7 @@ function LockBundleModal({
   const [selected, setSelected] = useState<Set<string>>(
     () => new Set(events.length > 0 ? [events[events.length - 1].id] : []),
   );
-  const [note, setNote] = useState("");
-  const [context, setContext] = useState("");
-  const valid = selected.size > 0 || note.trim().length > 0;
+  const valid = selected.size > 0;
 
   const submit = () => {
     if (!valid) return;
@@ -2203,8 +2199,6 @@ function LockBundleModal({
         eventRef: ev.id,
       });
     }
-    if (note.trim()) items.push({ weight: "SECONDARY", kind: "MANUAL_NOTE", content: note.trim(), author: me });
-    if (context.trim()) items.push({ weight: "CONTEXT", kind: "RULEBOOK", content: context.trim() });
     onLock(items);
   };
 
@@ -2212,13 +2206,13 @@ function LockBundleModal({
     <ModalShell title="Attach evidence & lock bundle" onClose={onClose}>
       <div className="flex flex-col gap-4">
         <div>
-          <FieldLabel>Timeline events (PRIMARY evidence)</FieldLabel>
+          <FieldLabel>Feed events (the only source of evidence)</FieldLabel>
           {events.length === 0 ? (
             <p className="text-xs" style={{ ...fontBody, color: C.muted }}>
-              No events on the timeline yet — add one first, or rely on a manual note below.
+              No events on the feed yet — wait for the match to produce some.
             </p>
           ) : (
-            <div className="flex flex-col gap-1.5 max-h-40 overflow-y-auto">
+            <div className="flex flex-col gap-1.5 max-h-56 overflow-y-auto">
               {events.map((ev) => (
                 <label key={ev.id} className="flex items-center gap-2 cursor-pointer text-sm" style={{ ...fontBody, color: C.chalk }}>
                   <input
@@ -2239,26 +2233,6 @@ function LockBundleModal({
               ))}
             </div>
           )}
-        </div>
-        <div>
-          <FieldLabel>Manual note (SECONDARY, optional)</FieldLabel>
-          <textarea
-            className={`${inputClass} h-16 resize-none`}
-            style={inputStyle}
-            placeholder="What you saw — e.g. defender made contact inside the box before the ball."
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-          />
-        </div>
-        <div>
-          <FieldLabel>Rulebook / context excerpt (CONTEXT, optional)</FieldLabel>
-          <textarea
-            className={`${inputClass} h-16 resize-none`}
-            style={inputStyle}
-            placeholder="A direct free kick is awarded if a player trips or attempts to trip an opponent…"
-            value={context}
-            onChange={(e) => setContext(e.target.value)}
-          />
         </div>
         <div className="pt-2 border-t" style={{ borderColor: C.hairline }}>
           <p className="text-xs mb-3" style={{ ...fontBody, color: C.amber }}>
@@ -2548,12 +2522,7 @@ export default function App() {
         />
       )}
       {modal === "lockBundle" && view && (
-        <LockBundleModal
-          view={view}
-          me={identity.wallet}
-          onClose={() => setModal(null)}
-          onLock={handleLockBundle}
-        />
+        <LockBundleModal view={view} onClose={() => setModal(null)} onLock={handleLockBundle} />
       )}
     </div>
   );
