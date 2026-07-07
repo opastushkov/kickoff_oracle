@@ -18,5 +18,3 @@ Thumbs.db
 # Local assistant/tooling config
 .claude/
 
-# Documentation excluded from the repo for now (by request)
-doc/
