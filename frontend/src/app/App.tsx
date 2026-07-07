@@ -315,20 +315,16 @@ function EvidenceTimeline({ events, label }: { events: TimelineEvent[]; label: s
 // ─── Market card ──────────────────────────────────────────────────────────────
 function MarketCard({
   question,
-  category,
   status,
   yesStake,
   noStake,
-  policy,
   onClick,
   noConsensus,
 }: {
   question: string;
-  category: string;
   status: string;
   yesStake: string;
   noStake: string;
-  policy: string;
   onClick?: () => void;
   noConsensus?: boolean;
 }) {
@@ -346,11 +342,10 @@ function MarketCard({
       </div>
 
       <div className="flex items-center gap-2 mb-3 flex-wrap">
-        <CategoryTag cat={category} />
         <StatusChip status={status} />
       </div>
 
-      <div className="flex items-center gap-4 mb-3">
+      <div className="flex items-center gap-4">
         <div className="flex items-center gap-1.5">
           <span className="text-xs" style={{ ...fontBody, color: C.muted }}>YES</span>
           <span className="text-xs font-medium" style={{ ...fontBody, color: C.green }}>{yesStake} test USDt</span>
@@ -360,8 +355,6 @@ function MarketCard({
           <span className="text-xs font-medium" style={{ ...fontBody, color: C.red }}>{noStake} test USDt</span>
         </div>
       </div>
-
-      <div className="text-xs" style={{ ...fontMono, color: C.muted }}>{policy}</div>
 
       {noConsensus && (
         <div className="mt-3 pt-3 border-t" style={{ borderColor: C.hairline }}>
@@ -902,19 +895,40 @@ function RoomScreen({
 
           {/* Room resolution policy — set once by the room creator, applies to every market */}
           <div
-            className="flex items-center gap-3 px-4 py-2.5 rounded-lg border"
+            className="rounded-xl border overflow-hidden"
             style={{ background: C.panel, borderColor: C.hairline }}
           >
-            <span className="text-xs uppercase tracking-widest shrink-0" style={{ ...fontBody, color: C.muted }}>
-              Room resolution policy
-            </span>
-            <span className="text-xs" style={{ ...fontMono, color: C.chalk }}>
-              Distributed jury — every device votes · quorum {room.policy.jury?.quorum} ·
-              juror {room.policy.jury?.model} · tiebreaker {room.policy.fallback.model}
-            </span>
-            <span className="ml-auto text-xs shrink-0" style={{ ...fontBody, color: C.muted }}>
-              Set by room creator
-            </span>
+            <div
+              className="flex items-center gap-2 px-5 py-2.5 border-b"
+              style={{ borderColor: C.hairline, background: "rgba(30,122,70,0.05)" }}
+            >
+              <ShieldQuestion size={14} style={{ color: C.green }} />
+              <span className="text-sm font-bold" style={{ ...fontCondensed, color: C.chalk, fontSize: 16, letterSpacing: 0.5 }}>
+                DISTRIBUTED JURY
+              </span>
+              <span className="text-xs" style={{ ...fontBody, color: C.muted }}>
+                every participant's device judges — set by the room creator, fixed for the room
+              </span>
+            </div>
+            <div className="grid grid-cols-3 divide-x" style={{ borderColor: C.hairline }}>
+              {[
+                { label: "Quorum", value: `${room.policy.jury?.quorum} agreeing`, sub: "jurors to resolve" },
+                { label: "Juror model", value: room.policy.jury?.model ?? "—", sub: "runs on every device" },
+                { label: "Tiebreaker", value: room.policy.fallback.model, sub: "decides a split" },
+              ].map((c) => (
+                <div key={c.label} className="px-5 py-3" style={{ borderColor: C.hairline }}>
+                  <div className="text-xs uppercase tracking-widest mb-1" style={{ ...fontBody, color: C.muted }}>
+                    {c.label}
+                  </div>
+                  <div className="text-sm font-semibold" style={{ ...fontBody, color: C.chalk }}>
+                    {c.value}
+                  </div>
+                  <div className="text-xs" style={{ ...fontBody, color: C.muted }}>
+                    {c.sub}
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
 
           {/* Market grid — or the empty state for a fresh room (UC-01 alt flow) */}
@@ -940,11 +954,9 @@ function RoomScreen({
                 <MarketCard
                   key={m.id}
                   question={m.question}
-                  category={CATEGORY_LABEL[m.category] ?? m.category}
                   status={STATUS_LABEL[m.status] ?? m.status}
                   yesStake={formatUSDt(stakeTotal(m, "YES"))}
                   noStake={formatUSDt(stakeTotal(m, "NO"))}
-                  policy={policyLabel(view)}
                   onClick={() => onSelectMarket(m.id)}
                   noConsensus={m.status === "NO_CONSENSUS"}
                 />
@@ -1148,15 +1160,8 @@ function MarketScreen({
               </h1>
               <StatusChip status={STATUS_LABEL[market.status] ?? market.status} />
             </div>
-            <div className="flex items-center gap-3">
-              <CategoryTag cat={CATEGORY_LABEL[market.category] ?? market.category} />
-              <span
-                className="text-xs px-2.5 py-1 rounded border"
-                style={{ ...fontMono, color: C.muted, borderColor: C.hairline }}
-              >
-                Room policy: {policyLabel(view)}
-              </span>
-              {isCreator && market.status === "OPEN" && (
+            {isCreator && market.status === "OPEN" && (
+              <div className="flex">
                 <button
                   onClick={onCloseStaking}
                   className="ml-auto px-3 py-1.5 rounded-lg text-xs font-medium border transition-all hover:opacity-80"
@@ -1164,8 +1169,8 @@ function MarketScreen({
                 >
                   Close staking
                 </button>
-              )}
-            </div>
+              </div>
+            )}
           </div>
 
           {/* Stake panel */}
@@ -1724,6 +1729,32 @@ function FieldLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
+/** A field label with a collapsible ⓘ hint — keeps modals uncluttered. */
+function FieldLabelHint({ label, hint }: { label: string; hint: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="mb-1.5">
+      <div className="flex items-center gap-1.5">
+        <span className="text-xs uppercase tracking-widest" style={{ ...fontBody, color: C.muted }}>{label}</span>
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          className="inline-flex items-center justify-center w-4 h-4 rounded-full text-xs leading-none transition-all hover:opacity-80"
+          style={{ ...fontBody, background: open ? C.green : C.panel2, color: open ? "#fff" : C.muted }}
+          title="What's this?"
+        >
+          i
+        </button>
+      </div>
+      {open && (
+        <p className="text-xs mt-1" style={{ ...fontBody, color: C.muted, textTransform: "none" }}>
+          {hint}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function ModelStatusBadge({
   info,
   online,
@@ -1953,7 +1984,10 @@ function CreateRoomModal({
         </div>
 
         <div>
-          <FieldLabel>Jury quorum — agreeing jurors that resolve a market</FieldLabel>
+          <FieldLabelHint
+            label="Jury quorum"
+            hint="Every participant's device runs the juror model and signs one verdict; the market resolves once this many agree. Solo demo → set 1."
+          />
           <div className="flex items-center gap-3">
             <button
               onClick={() => setQuorum((q) => Math.max(1, q - 1))}
@@ -1973,16 +2007,13 @@ function CreateRoomModal({
               +
             </button>
           </div>
-          <p className="text-xs mt-1" style={{ ...fontBody, color: C.muted }}>
-            Every participant's device runs the juror model and signs one verdict; the
-            market resolves once this many agree. Solo demo → set 1.
-          </p>
         </div>
 
         <div>
-          <FieldLabel>
-            Juror model — runs on every device {sidecarOnline ? "(local, via QVAC)" : "(oracle node offline — mock verdicts)"}
-          </FieldLabel>
+          <FieldLabelHint
+            label={`Juror model ${sidecarOnline ? "(local, via QVAC)" : "(node offline — mock)"}`}
+            hint="The model each participant's device runs to judge the evidence. Bigger models judge better; download happens peer-to-peer through QVAC."
+          />
           <ModelSlotRow
             label="Juror"
             value={jurorModel}
@@ -1993,21 +2024,17 @@ function CreateRoomModal({
         </div>
 
         <div>
-          <FieldLabel>Tiebreaker model — decides a split jury</FieldLabel>
-          <div className="mb-2">
-            <ModelSlotRow
-              label="Tiebreaker"
-              value={tiebreakerModel}
-              onChange={setTiebreakerModel}
-              catalog={catalog}
-              online={sidecarOnline}
-            />
-          </div>
-          <p className="text-xs" style={{ ...fontBody, color: C.muted }}>
-            If the jury never reaches quorum, a tiebreaker judge rules on the same locked
-            evidence; if it too finds the evidence insufficient, the market cancels and
-            stakes are refunded.
-          </p>
+          <FieldLabelHint
+            label="Tiebreaker model"
+            hint="If the jury never reaches quorum, a tiebreaker judge rules on the same locked evidence; if it too finds the evidence insufficient, the market cancels and stakes are refunded."
+          />
+          <ModelSlotRow
+            label="Tiebreaker"
+            value={tiebreakerModel}
+            onChange={setTiebreakerModel}
+            catalog={catalog}
+            online={sidecarOnline}
+          />
           {sidecarOnline && !modelReady && (
             <p className="text-xs mt-1.5" style={{ ...fontBody, color: C.amber }}>
               The juror or tiebreaker model isn't on this machine yet — download it to create the room.
@@ -2110,60 +2137,33 @@ function JoinRoomModal({
   );
 }
 
-/** UC-03: create a market; the room policy is inherited and shown read-only. */
+/** UC-03: create a market. It inherits the room's jury policy automatically. */
 function CreateMarketModal({
   onClose,
   onCreate,
-  policyText,
 }: {
   onClose: () => void;
-  onCreate: (question: string, category: Category) => void;
-  policyText: string;
+  onCreate: (question: string) => void;
 }) {
   const [question, setQuestion] = useState("");
-  const [category, setCategory] = useState<Category>("INTERPRETIVE");
   const valid = question.trim().length > 0;
   return (
     <ModalShell title="Create market" onClose={onClose}>
-      <div className="flex flex-col gap-5">
+      <div className="flex flex-col gap-4">
         <div>
-          <FieldLabel>Question (YES / NO)</FieldLabel>
+          <FieldLabel>Ask a YES / NO question about the match</FieldLabel>
           <input
             className={inputClass}
             style={inputStyle}
             placeholder="Was the penalty decision correct?"
             value={question}
             onChange={(e) => setQuestion(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && valid && onCreate(question.trim())}
+            autoFocus
           />
         </div>
-        <div>
-          <FieldLabel>Category</FieldLabel>
-          <div className="flex items-center gap-2">
-            {(["OBJECTIVE", "INTERPRETIVE"] as const).map((c) => (
-              <button
-                key={c}
-                onClick={() => setCategory(c)}
-                className="px-4 py-2 rounded-lg text-sm font-medium border transition-all"
-                style={{
-                  ...fontBody,
-                  background: category === c ? C.green : "transparent",
-                  color: category === c ? "#fff" : C.chalk,
-                  borderColor: category === c ? C.green : C.hairline,
-                }}
-              >
-                {CATEGORY_LABEL[c]}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div>
-          <FieldLabel>Resolution policy (room-wide, read-only)</FieldLabel>
-          <div className="text-xs px-3 py-2 rounded-lg border" style={{ ...fontMono, color: C.muted, borderColor: C.hairline, background: C.bg }}>
-            {policyText} — set by the room creator
-          </div>
-        </div>
         <button
-          onClick={() => valid && onCreate(question.trim(), category)}
+          onClick={() => valid && onCreate(question.trim())}
           disabled={!valid}
           className="w-full py-2.5 rounded-lg text-sm font-semibold transition-all hover:opacity-90"
           style={{
@@ -2555,9 +2555,9 @@ export default function App() {
     return true;
   };
 
-  const handleCreateMarket = (question: string, category: Category) => {
+  const handleCreateMarket = (question: string) => {
     if (!activeEngine) return;
-    const id = activeEngine.createMarket({ question, category });
+    const id = activeEngine.createMarket({ question, category: "INTERPRETIVE" });
     setSelectedMarketId(id);
     setModal(null);
   };
@@ -2637,11 +2637,7 @@ export default function App() {
         <JoinRoomModal onClose={() => setModal(null)} onJoin={handleJoinRoom} />
       )}
       {modal === "createMarket" && view && (
-        <CreateMarketModal
-          onClose={() => setModal(null)}
-          onCreate={handleCreateMarket}
-          policyText={policyLabel(view)}
-        />
+        <CreateMarketModal onClose={() => setModal(null)} onCreate={handleCreateMarket} />
       )}
       {modal === "wallet" && (
         <WalletModal
