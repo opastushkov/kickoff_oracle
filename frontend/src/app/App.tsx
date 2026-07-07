@@ -24,10 +24,10 @@ import {
 } from "lucide-react";
 
 import {
-  MATCH_FIXTURE,
   fetchMatchFixture,
   searchRealMatches,
   startMatchFeed,
+  type MatchFixture,
   type RemoteMatch,
 } from "../engine/feed";
 import { KickoffEngine, formatUSDt, shortHash, stakeTotal } from "../engine/engine";
@@ -1813,7 +1813,8 @@ function CreateRoomModal({
   onCreate: (input: {
     name: string;
     matchContext: string;
-    feedMatchId?: string;
+    feedMatchId: string;
+    fixture: MatchFixture;
     policy: RoomPolicy;
   }) => void;
 }) {
@@ -1826,6 +1827,8 @@ function CreateRoomModal({
   const [tiebreakerModel, setTiebreakerModel] = useState("Llama 3.2 1B");
   const [quorum, setQuorum] = useState(2);
   const [models, setModels] = useState<QvacModelInfo[] | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [createErr, setCreateErr] = useState<string | null>(null);
 
   // Poll the sidecar's model catalog while the modal is open so download
   // progress updates live (UC-01: pick + download the oracle model).
@@ -1848,11 +1851,11 @@ function CreateRoomModal({
   const infoOf = (n: string) => catalog.find((m) => m.name === n);
 
   const MAX_QUORUM = 5;
-  // Without a sidecar the mock runtime serves any name; with one, the juror
-  // model and the tiebreaker model must be downloaded first.
+  // The juror model and the tiebreaker model must be downloaded first.
   const neededModels = [...new Set([jurorModel, tiebreakerModel])];
-  const modelReady = !sidecarOnline || neededModels.every((n) => infoOf(n)?.loaded);
-  const valid = name.trim().length > 0 && modelReady;
+  const modelReady = neededModels.every((n) => infoOf(n)?.loaded);
+  // Real matches only: a room must bind to a real match, which needs the sidecar.
+  const valid = sidecarOnline && name.trim().length > 0 && modelReady && selectedMatch != null;
 
   const doSearch = async () => {
     if (searching || matchQuery.trim().length === 0) return;
@@ -1862,12 +1865,23 @@ function CreateRoomModal({
     setSearching(false);
   };
 
-  const submit = () => {
-    if (!valid) return;
+  const submit = async () => {
+    if (!valid || creating || !selectedMatch) return;
+    setCreating(true);
+    setCreateErr(null);
+    // Fetch the real match timeline now; refuse to create if it has none
+    // (no silent fixture fallback — the jury only judges real match data).
+    const fixture = await fetchMatchFixture(selectedMatch.id);
+    if (!fixture) {
+      setCreateErr("This match has no event timeline available yet — pick another match.");
+      setCreating(false);
+      return;
+    }
     onCreate({
       name: name.trim(),
-      matchContext: selectedMatch?.label ?? MATCH_FIXTURE.label,
-      feedMatchId: selectedMatch?.id,
+      matchContext: selectedMatch.label,
+      feedMatchId: selectedMatch.id,
+      fixture,
       policy: {
         committee: [], // jury mode: no fixed committee — every device is a juror
         threshold: quorum,
@@ -1885,64 +1899,57 @@ function CreateRoomModal({
           <input className={inputClass} style={inputStyle} value={name} onChange={(e) => setName(e.target.value)} />
         </div>
         <div>
-          <FieldLabel>Match</FieldLabel>
-          <div className="flex flex-col gap-1.5">
-            <div
-              onClick={() => setSelectedMatch(null)}
-              className="px-3 py-2 rounded-lg border cursor-pointer transition-all"
-              style={{
-                borderColor: !selectedMatch ? C.green : C.hairline,
-                background: !selectedMatch ? "rgba(30,122,70,0.06)" : C.bg,
-              }}
-            >
-              <span className="text-sm" style={{ ...fontBody, color: C.chalk }}>
-                {MATCH_FIXTURE.label}
-              </span>
-              <span className="block text-xs mt-0.5" style={{ ...fontBody, color: C.muted }}>
-                Built-in demo replay — always available
-              </span>
-            </div>
-            {sidecarOnline && (
-              <>
-                <div className="flex items-center gap-2 mt-1">
-                  <input
-                    className={inputClass}
-                    style={inputStyle}
-                    placeholder="…or a real match: type a team (e.g. Arsenal, Argentina)"
-                    value={matchQuery}
-                    onChange={(e) => setMatchQuery(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && doSearch()}
-                  />
-                  <button
-                    onClick={doSearch}
-                    disabled={searching}
-                    className="px-4 py-2 rounded-lg text-sm font-semibold shrink-0 transition-all hover:opacity-90"
-                    style={{ ...fontBody, background: searching ? C.panel2 : C.teal, color: searching ? C.muted : "#fff" }}
-                  >
-                    {searching ? "Searching…" : "Search"}
-                  </button>
+          <FieldLabel>Match — pick a real match to judge</FieldLabel>
+          {!sidecarOnline ? (
+            <p className="text-xs" style={{ ...fontBody, color: C.amber }}>
+              Real match data needs the local sidecar. Start it
+              (<span style={{ ...fontMono }}>start-host.cmd</span>) and reopen this.
+            </p>
+          ) : (
+            <div className="flex flex-col gap-1.5">
+              <div className="flex items-center gap-2">
+                <input
+                  className={inputClass}
+                  style={inputStyle}
+                  placeholder="Type a team (e.g. Arsenal, Argentina, Real Madrid)"
+                  value={matchQuery}
+                  onChange={(e) => setMatchQuery(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && doSearch()}
+                />
+                <button
+                  onClick={doSearch}
+                  disabled={searching}
+                  className="px-4 py-2 rounded-lg text-sm font-semibold shrink-0 transition-all hover:opacity-90"
+                  style={{ ...fontBody, background: searching ? C.panel2 : C.teal, color: searching ? C.muted : "#fff" }}
+                >
+                  {searching ? "Searching…" : "Search"}
+                </button>
+              </div>
+              {matchResults.length === 0 && !searching && (
+                <p className="text-xs" style={{ ...fontBody, color: C.muted }}>
+                  Search a team to list its recent real matches, then pick one.
+                </p>
+              )}
+              {matchResults.map((m) => (
+                <div
+                  key={m.id}
+                  onClick={() => setSelectedMatch(m)}
+                  className="px-3 py-2 rounded-lg border cursor-pointer transition-all"
+                  style={{
+                    borderColor: selectedMatch?.id === m.id ? C.green : C.hairline,
+                    background: selectedMatch?.id === m.id ? "rgba(30,122,70,0.06)" : C.bg,
+                  }}
+                >
+                  <span className="text-sm" style={{ ...fontBody, color: C.chalk }}>
+                    {m.label}
+                  </span>
+                  <span className="block text-xs mt-0.5" style={{ ...fontBody, color: C.muted }}>
+                    Real events, replayed on an accelerated clock
+                  </span>
                 </div>
-                {matchResults.map((m) => (
-                  <div
-                    key={m.id}
-                    onClick={() => setSelectedMatch(m)}
-                    className="px-3 py-2 rounded-lg border cursor-pointer transition-all"
-                    style={{
-                      borderColor: selectedMatch?.id === m.id ? C.green : C.hairline,
-                      background: selectedMatch?.id === m.id ? "rgba(30,122,70,0.06)" : C.bg,
-                    }}
-                  >
-                    <span className="text-sm" style={{ ...fontBody, color: C.chalk }}>
-                      {m.label}
-                    </span>
-                    <span className="block text-xs mt-0.5" style={{ ...fontBody, color: C.muted }}>
-                      Real events, replayed on an accelerated clock
-                    </span>
-                  </div>
-                ))}
-              </>
-            )}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
 
         <div>
@@ -2012,18 +2019,28 @@ function CreateRoomModal({
           <p className="text-xs mb-3" style={{ ...fontBody, color: C.muted }}>
             The policy is fixed at creation and applies to every market in this room.
           </p>
+          {sidecarOnline && !selectedMatch && (
+            <p className="text-xs mb-2" style={{ ...fontBody, color: C.amber }}>
+              Pick a real match above to create the room.
+            </p>
+          )}
+          {createErr && (
+            <p className="text-xs mb-2" style={{ ...fontBody, color: C.red }}>
+              {createErr}
+            </p>
+          )}
           <button
             onClick={submit}
-            disabled={!valid}
+            disabled={!valid || creating}
             className="w-full py-2.5 rounded-lg text-sm font-semibold transition-all hover:opacity-90"
             style={{
               ...fontBody,
-              background: valid ? C.green : C.panel2,
-              color: valid ? "#fff" : C.muted,
-              cursor: valid ? "pointer" : "default",
+              background: valid && !creating ? C.green : C.panel2,
+              color: valid && !creating ? "#fff" : C.muted,
+              cursor: valid && !creating ? "pointer" : "default",
             }}
           >
-            Create room
+            {creating ? "Fetching match & creating…" : "Create room"}
           </button>
         </div>
       </div>
@@ -2442,7 +2459,8 @@ export default function App() {
   const handleCreateRoom = async (input: {
     name: string;
     matchContext: string;
-    feedMatchId?: string;
+    feedMatchId: string;
+    fixture: MatchFixture;
     policy: RoomPolicy;
   }) => {
     const qvac = await detectQvacRuntime();
@@ -2455,11 +2473,15 @@ export default function App() {
       autoJury: true, // this device auto-casts its juror verdict; creator tallies quorum
     });
     engine.adoptIdentity(asParticipant(identity));
-    engine.createRoom({ ...input, inviteKey: key });
-    // The creator's client drives the match feed: the bound real match's true
-    // timeline when one was picked, the built-in fixture otherwise.
-    const remote = input.feedMatchId ? await fetchMatchFixture(input.feedMatchId) : null;
-    feedStops.current[key] = startMatchFeed(engine, remote ?? undefined);
+    engine.createRoom({
+      name: input.name,
+      matchContext: input.matchContext,
+      inviteKey: key,
+      feedMatchId: input.feedMatchId,
+      policy: input.policy,
+    });
+    // The creator's client drives the real match feed (already fetched + validated).
+    feedStops.current[key] = startMatchFeed(engine, input.fixture);
     setRooms((prev) => ({ ...prev, [key]: engine }));
     // Set the view synchronously — the subscription effect only re-fires when the
     // engine instance changes, so a null view could otherwise never repopulate.
@@ -2526,7 +2548,7 @@ export default function App() {
     const joinedRoom = engine.getView().room;
     if (joinedRoom?.creator === identity.wallet && !feedStops.current[key]) {
       const remote = joinedRoom.feedMatchId ? await fetchMatchFixture(joinedRoom.feedMatchId) : null;
-      feedStops.current[key] = startMatchFeed(engine, remote ?? undefined);
+      if (remote) feedStops.current[key] = startMatchFeed(engine, remote);
     }
     setRooms((prev) => ({ ...prev, [key]: engine }));
     activateRoom(key, engine);

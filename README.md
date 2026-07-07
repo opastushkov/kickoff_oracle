@@ -94,13 +94,13 @@ Full design docs: [doc/backend-design.md](doc/backend-design.md),
   app logic, engine, and sidecar are hand-written for this project.
 - **Infra:** public Sepolia RPC (`ethereum-sepolia-rpc.publicnode.com`, configurable via
   `WDK_EVM_RPC`); Etherscan for receipt links; `ws` for the local browser↔sidecar bridge.
-- **Match data:** rooms bind either to a built-in demo fixture ("Ukraine vs Spain") or
-  to a **real match**: the sidecar fetches the match's true timeline (goals, cards,
-  penalties, final score) from **TheSportsDB** (free/dev API key by default; set
-  `SPORTSDB_KEY` for a production key) and replays it on an accelerated clock.
-  Per-player stat events are derived strictly from the real timeline — nothing is
-  invented. Richer per-player statistics (API-Football/Opta-class) plug into the same
-  provider seam.
+- **Match data:** every room binds to a **real match** (no built-in fixture) — the
+  creator searches a team and picks one of its matches, and the sidecar fetches that
+  match's true timeline (goals, cards, subs, team + player stats, final score) from
+  **TheSportsDB** (free/dev API key by default; set `SPORTSDB_KEY` for a production key)
+  and replays it on an accelerated clock. A match with no available timeline is refused
+  at creation — the jury only ever judges real data. Richer per-player statistics
+  (API-Football/Opta-class) plug into the same provider seam.
 - **Known trust boundaries:** the host wallet is a custodial escrow (every movement
   on-chain and auditable; contract escrow is designed as the next step), and the oracle
   runner is trusted to execute models faithfully (verdicts are hash-bound to locked
