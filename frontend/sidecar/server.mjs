@@ -62,6 +62,9 @@ function ensureModelByName(name) {
       entry.modelId = await sdk.loadModel({
         modelSrc: sdk[spec.constant],
         modelType: "llm",
+        // Default context is 1024 tokens — a real match feed (events + team +
+        // player stats) overflows it ("context overflow at batch prefill").
+        modelConfig: { ctx_size: 4096 },
         onProgress: (p) => {
           const raw = typeof p === "number" ? p : p?.percentage ?? p?.progress ?? p?.percent ?? NaN;
           const pct = Math.round(raw <= 1 && raw > 0 ? raw * 100 : raw);

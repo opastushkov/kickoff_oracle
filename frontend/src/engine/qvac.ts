@@ -27,8 +27,32 @@ const JSON_RULES =
   'Respond with a single JSON object and nothing else — no markdown, no prose around it: ' +
   '{"verdict":"YES"|"NO"|"INSUFFICIENT_EVIDENCE","confidence":<integer 0-100>,"reason":"<one sentence>"}';
 
+// The on-device models run with a finite context window (4096 tokens after
+// sidecar config; older sidecars default to 1024). Keep the evidence well
+// inside it: the weight/kind tags are dropped (in feed-lock mode every item
+// is a primary feed event), and an enormous timeline keeps its head (kickoff,
+// early goals) and tail (late events, stats, full time) with the middle elided.
+const EVIDENCE_CHAR_BUDGET = 9000; // ≈ 2.5k tokens of a 4k window
+
 function bundleText(items: EvidenceItem[]): string {
-  return items.map((i) => `- [${i.weight} · ${i.kind}] ${i.content}`).join("\n");
+  const lines = items.map((i) => `- ${i.content}`);
+  if (lines.reduce((n, l) => n + l.length + 1, 0) <= EVIDENCE_CHAR_BUDGET) return lines.join("\n");
+  const half = EVIDENCE_CHAR_BUDGET / 2;
+  const head: string[] = [];
+  let used = 0;
+  let i = 0;
+  for (; i < lines.length && used + lines[i].length + 1 <= half; i++) {
+    head.push(lines[i]);
+    used += lines[i].length + 1;
+  }
+  const tail: string[] = [];
+  used = 0;
+  let j = lines.length - 1;
+  for (; j >= i && used + lines[j].length + 1 <= half; j--) {
+    tail.unshift(lines[j]);
+    used += lines[j].length + 1;
+  }
+  return [...head, `… (${j - i + 1} mid-match events omitted to fit the model's context) …`, ...tail].join("\n");
 }
 
 function parseVerdict(text: string): { verdict: JudgeResult["verdict"]; confidence: number; reason: string } | null {
