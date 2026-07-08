@@ -1837,8 +1837,10 @@ function ModelSlotRow({
         <span className="w-24 text-sm shrink-0" style={{ ...fontBody, color: C.chalk }}>
           {label}
         </span>
+        {/* min-w-0 lets the select shrink below its longest option, so the
+            download badge stays inside narrow panels instead of overflowing */}
         <select
-          className="flex-1 px-2 py-1.5 rounded-lg text-sm"
+          className="flex-1 min-w-0 px-2 py-1.5 rounded-lg text-sm"
           style={inputStyle}
           value={value}
           onChange={(e) => onChange(e.target.value)}
@@ -1856,7 +1858,7 @@ function ModelSlotRow({
         />
       </div>
       {error && (
-        <p className="text-xs mt-1 ml-24 pl-3" style={{ ...fontBody, color: C.red }}>
+        <p className="text-xs mt-1" style={{ ...fontBody, color: C.red }}>
           {error}
         </p>
       )}
