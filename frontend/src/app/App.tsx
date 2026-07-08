@@ -1826,24 +1826,40 @@ function ModelSlotRow({
   online: boolean;
 }) {
   const info = catalog.find((m) => m.name === value);
+  // Download failures were invisible (the load runs in the background on the
+  // sidecar) — surface both an outright refusal and a failed background load.
+  const [requestError, setRequestError] = useState<string | null>(null);
+  useEffect(() => setRequestError(null), [value]);
+  const error = requestError ?? (info?.downloading == null && !info?.loaded ? info?.error : null);
   return (
-    <div className="flex items-center gap-3">
-      <span className="w-24 text-sm shrink-0" style={{ ...fontBody, color: C.chalk }}>
-        {label}
-      </span>
-      <select
-        className="flex-1 px-2 py-1.5 rounded-lg text-sm"
-        style={inputStyle}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-      >
-        {catalog.map((m) => (
-          <option key={m.name} value={m.name}>
-            {m.name} (~{m.sizeMB} MB)
-          </option>
-        ))}
-      </select>
-      <ModelStatusBadge info={info} online={online} onDownload={() => void requestQvacModel(value)} />
+    <div>
+      <div className="flex items-center gap-3">
+        <span className="w-24 text-sm shrink-0" style={{ ...fontBody, color: C.chalk }}>
+          {label}
+        </span>
+        <select
+          className="flex-1 px-2 py-1.5 rounded-lg text-sm"
+          style={inputStyle}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+        >
+          {catalog.map((m) => (
+            <option key={m.name} value={m.name}>
+              {m.name} (~{m.sizeMB} MB)
+            </option>
+          ))}
+        </select>
+        <ModelStatusBadge
+          info={info}
+          online={online}
+          onDownload={async () => setRequestError(await requestQvacModel(value))}
+        />
+      </div>
+      {error && (
+        <p className="text-xs mt-1 ml-24 pl-3" style={{ ...fontBody, color: C.red }}>
+          {error}
+        </p>
+      )}
     </div>
   );
 }

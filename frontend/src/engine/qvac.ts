@@ -144,6 +144,8 @@ export interface QvacModelInfo {
   loaded: boolean;
   /** Download progress 0–100 while downloading, null otherwise. */
   downloading: number | null;
+  /** Why the last download failed, if it did (from GET /models). */
+  error?: string | null;
 }
 
 export async function listQvacModels(baseUrl = "http://127.0.0.1:8791"): Promise<QvacModelInfo[] | null> {
@@ -157,7 +159,11 @@ export async function listQvacModels(baseUrl = "http://127.0.0.1:8791"): Promise
   }
 }
 
-export async function requestQvacModel(name: string, baseUrl = "http://127.0.0.1:8791"): Promise<boolean> {
+/** Ask the sidecar to download a model. Returns null on success, else why not. */
+export async function requestQvacModel(
+  name: string,
+  baseUrl = "http://127.0.0.1:8791",
+): Promise<string | null> {
   try {
     const res = await fetch(`${baseUrl}/models/load`, {
       method: "POST",
@@ -165,9 +171,11 @@ export async function requestQvacModel(name: string, baseUrl = "http://127.0.0.1
       body: JSON.stringify({ name }),
       signal: AbortSignal.timeout(5000),
     });
-    return res.ok;
+    if (res.ok) return null;
+    const j = await res.json().catch(() => null);
+    return String(j?.error ?? `download request failed (HTTP ${res.status})`);
   } catch {
-    return false;
+    return "The local helper did not respond — is the sidecar running on this machine?";
   }
 }
 

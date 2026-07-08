@@ -39,8 +39,10 @@ const CATALOG = {
   "SmolLM2 360M": { constant: "SMOLLM2_360M_INST_Q8", sizeMB: 390 },
 };
 
-// name → { modelId, loading: Promise|null, progress: number|null }
-const models = new Map(Object.keys(CATALOG).map((n) => [n, { modelId: null, loading: null, progress: null }]));
+// name → { modelId, loading: Promise|null, progress: number|null, error: string|null }
+const models = new Map(
+  Object.keys(CATALOG).map((n) => [n, { modelId: null, loading: null, progress: null, error: null }]),
+);
 
 function ensureModelByName(name) {
   const entry = models.get(name);
@@ -53,6 +55,7 @@ function ensureModelByName(name) {
     let lastPct = -1;
     console.log(`[sidecar] loading model "${name}"…`);
     entry.progress = 0;
+    entry.error = null;
     try {
       const sdk = await getSdk();
       if (!sdk[spec.constant]) throw new Error(`unknown model "${name}"`);
@@ -77,6 +80,7 @@ function ensureModelByName(name) {
     } catch (err) {
       entry.loading = null;
       entry.progress = null;
+      entry.error = String(err?.message ?? err); // surfaced to the UI via GET /models
       throw err;
     }
   })();
@@ -91,6 +95,7 @@ function modelStates() {
       sizeMB: spec.sizeMB,
       loaded: e.modelId != null,
       downloading: e.modelId == null && e.loading != null ? (e.progress ?? 0) : null,
+      error: e.error,
     };
   });
 }
@@ -257,6 +262,11 @@ const server = createServer(async (req, res) => {
       try {
         const { name } = JSON.parse(body);
         if (!CATALOG[name]) throw new Error(`unknown model "${name}"`);
+        if (process.env.QVAC_DISABLE_LLM) {
+          throw new Error(
+            "This helper runs in viewer mode (no AI). To judge on this machine, close the helper window and run start-juror.cmd instead.",
+          );
+        }
         // Fire and forget — progress is polled via GET /models.
         ensureModelByName(name).catch((err) =>
           console.error(`[sidecar] load "${name}" failed:`, err?.message ?? err),
