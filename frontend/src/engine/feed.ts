@@ -26,6 +26,9 @@ export interface MatchFixture {
   events: FixtureEvent[];
 }
 
+/** Seconds between replayed events (accelerated clock for demos). */
+const EVENT_SPACING_S = 8;
+
 export interface RemoteMatch {
   id: string;
   label: string;
@@ -63,7 +66,9 @@ export async function fetchMatchFixture(
       label: String(j.label ?? "Real match"),
       events: j.events.map((e: FixtureEvent, i: number) => ({
         id: `api_${matchId}_${i}`, // deterministic → dedups across peers
-        atSeconds: 12 + i * 30,
+        // Accelerated replay: ~EVENT_SPACING_S between events → a full match in
+        // ~90s so a room can stake, reach full time, and resolve within a demo.
+        atSeconds: 5 + i * EVENT_SPACING_S,
         minute: e.minute,
         type: e.type,
         team: e.team,
@@ -89,7 +94,7 @@ export function startMatchFeed(engine: KickoffEngine, fixture: MatchFixture): ()
   const base = pending[0].atSeconds;
   const timers: ReturnType<typeof setTimeout>[] = [];
   for (const ev of pending) {
-    const delayMs = (ev.atSeconds - base + 10) * 1000; // first pending event ~10 s in
+    const delayMs = (ev.atSeconds - base + 4) * 1000; // first pending event ~4 s in
     timers.push(
       setTimeout(() => {
         void engine.emitEvent({
