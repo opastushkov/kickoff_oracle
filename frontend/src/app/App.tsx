@@ -2125,12 +2125,14 @@ function CreateRoomModal({
 }
 
 /** UC-02: join an existing room by invite key. */
+type JoinResult = { ok: true } | { ok: false; reason: "empty" | "no-sidecar" | "not-found" };
+
 function JoinRoomModal({
   onClose,
   onJoin,
 }: {
   onClose: () => void;
-  onJoin: (key: string) => Promise<boolean>;
+  onJoin: (key: string) => Promise<JoinResult>;
 }) {
   const [key, setKey] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -2139,10 +2141,14 @@ function JoinRoomModal({
     if (busy) return;
     setBusy(true);
     setError(null);
-    const ok = await onJoin(key);
-    if (!ok) {
+    const res = await onJoin(key);
+    if (!res.ok) {
       setError(
-        "Room not found yet — check the key and that the room's creator is online, then try again. The search keeps running in the background, so a retry is often instant.",
+        res.reason === "no-sidecar"
+          ? "No local helper is running on this machine. Start the sidecar (run start-viewer.cmd, or `node server.mjs` in frontend/sidecar), open http://127.0.0.1:8791/health to confirm it returns ok, then try again."
+          : res.reason === "empty"
+            ? "Enter the invite key the room creator gave you."
+            : "Room not found on the swarm yet. On first contact two machines can take up to a minute to find each other — the search keeps running in the background, so just click Join again (a retry is usually instant). Also check the key is exact and that the creator's machine is online.",
       );
       setBusy(false);
     }
@@ -2555,15 +2561,15 @@ export default function App() {
     setScreen("room");
   };
 
-  const handleJoinRoom = async (rawKey: string): Promise<boolean> => {
+  const handleJoinRoom = async (rawKey: string): Promise<JoinResult> => {
     const key = rawKey.trim();
-    if (!key) return false;
+    if (!key) return { ok: false, reason: "empty" };
 
     // Rooms already known in this session first.
     const local = Object.keys(rooms).find((r) => r.toLowerCase() === key.toLowerCase());
     if (local) {
       activateRoom(local, rooms[local]);
-      return true;
+      return { ok: true };
     }
 
     // Unknown key → join over P2P: connect to the swarm topic via the sidecar
@@ -2571,7 +2577,7 @@ export default function App() {
     // Detect the sidecar NOW rather than trusting page-load state — it may
     // have been started after the page loaded.
     const qvac = await detectQvacRuntime();
-    if (!qvac) return false; // no sidecar → no cross-machine transport
+    if (!qvac) return { ok: false, reason: "no-sidecar" }; // sidecar down → no cross-machine transport
     if (!sidecarUp) setSidecarUp(true);
     const engine = new KickoffEngine({
       runtime: qvac,
@@ -2582,13 +2588,13 @@ export default function App() {
     });
     const guest = asParticipant(identity);
     engine.adoptIdentity(guest);
-    // First DHT contact for a topic can take 30-90s; keep searching for 60s.
+    // First DHT contact for a topic can take 30-90s; keep searching for 90s.
     // The sidecar stays joined to the swarm afterwards, so a retry is fast.
     const found = await new Promise<boolean>((resolve) => {
       const timer = setTimeout(() => {
         unsub();
         resolve(false);
-      }, 60_000);
+      }, 90_000);
       const unsub = engine.subscribe((v) => {
         if (v.room) {
           clearTimeout(timer);
@@ -2597,7 +2603,7 @@ export default function App() {
         }
       });
     });
-    if (!found) return false;
+    if (!found) return { ok: false, reason: "not-found" };
     engine.joinAs(guest); // announce ourselves: avatar appears on every peer
     // If we are this room's creator rejoining after a reload, resume the feed.
     const joinedRoom = engine.getView().room;
@@ -2607,7 +2613,7 @@ export default function App() {
     }
     setRooms((prev) => ({ ...prev, [key]: engine }));
     activateRoom(key, engine);
-    return true;
+    return { ok: true };
   };
 
   const handleCreateMarket = (question: string) => {
