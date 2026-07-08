@@ -10,8 +10,21 @@
 //   POST /complete  → { messages: [{role, content}] } → { text, model, ms }
 
 import { createServer } from "node:http";
-import * as sdk from "@qvac/sdk";
 import { initRooms } from "./rooms.mjs";
+
+// The QVAC SDK pulls in a native runtime binary. Load it lazily so a P2P-only
+// viewer (start-viewer.cmd sets QVAC_DISABLE_LLM=1) or a machine that hasn't
+// installed the native binary still boots and serves rooms + wallet — only
+// on-device judging actually needs the model. A hard top-level import here
+// would crash the whole sidecar at startup on such a machine.
+let sdkPromise = null;
+function getSdk() {
+  if (process.env.QVAC_DISABLE_LLM) {
+    return Promise.reject(new Error("on-device LLM disabled on this node (QVAC_DISABLE_LLM)"));
+  }
+  sdkPromise ??= import("@qvac/sdk");
+  return sdkPromise;
+}
 
 const PORT = Number(process.env.QVAC_SIDECAR_PORT ?? 8791);
 const DEFAULT_MODEL = "Llama 3.2 1B";
@@ -32,7 +45,7 @@ const models = new Map(Object.keys(CATALOG).map((n) => [n, { modelId: null, load
 function ensureModelByName(name) {
   const entry = models.get(name);
   const spec = CATALOG[name];
-  if (!entry || !spec || !sdk[spec.constant]) {
+  if (!entry || !spec) {
     return Promise.reject(new Error(`unknown model "${name}"`));
   }
   if (entry.modelId) return Promise.resolve(entry.modelId);
@@ -41,6 +54,8 @@ function ensureModelByName(name) {
     console.log(`[sidecar] loading model "${name}"…`);
     entry.progress = 0;
     try {
+      const sdk = await getSdk();
+      if (!sdk[spec.constant]) throw new Error(`unknown model "${name}"`);
       entry.modelId = await sdk.loadModel({
         modelSrc: sdk[spec.constant],
         modelType: "llm",
@@ -83,6 +98,7 @@ function modelStates() {
 async function complete(messages, modelName = DEFAULT_MODEL) {
   const name = CATALOG[modelName] ? modelName : DEFAULT_MODEL;
   const id = await ensureModelByName(name);
+  const sdk = await getSdk();
   const t0 = Date.now();
   const result = sdk.completion({ modelId: id, history: messages, stream: true });
   let text = "";
