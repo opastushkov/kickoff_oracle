@@ -36,23 +36,63 @@ entering **all three tracks** — every one with a real, load-bearing integratio
    real Sepolia transactions, explained in plain language by a local model, and sealed
    in an audit log of hashes and tx receipts that is identical on every peer.
 
-## Quickstart (Windows)
+## Quickstart
 
 Prerequisites: Node.js ≥ 20, internet (one-time ~770 MB model download, DHT, Sepolia
-RPC). **Windows 11 note:** Smart App Control must be OFF (QVAC/Bare native binaries are
-unsigned).
+RPC). Runs on **Windows x64** and **Linux x64** (macOS: use the manual start below).
+
+One launcher per machine, three roles:
+
+| Role | Windows | Linux | What it does |
+|---|---|---|---|
+| **Host** | `.\start-host.cmd` | `./start-host.sh` | Main laptop: installs everything, starts the AI+P2P+wallet sidecar and the app, opens the browser (~20 s) |
+| **Juror** | `.\start-juror.cmd` | `./start-juror.sh` | Second laptop that **also judges** with its own local model — the two-device, different-model jury. Joins the host's room by invite key |
+| **Viewer** | `.\start-viewer.cmd` | `./start-viewer.sh` | Second laptop: joins rooms, stakes, watches — no AI model needed |
+
+### Windows
 
 ```powershell
 git clone https://github.com/opastushkov/kickoff_oracle.git
 cd kickoff_oracle
-.\start-host.cmd     # main laptop: installs everything, starts the AI+P2P+wallet
-                     # sidecar and the app, opens the browser (~20 s)
+.\start-host.cmd
 ```
 
-Second laptop (joins rooms, stakes, watches — no AI model needed):
+**Windows 11 note:** Smart App Control must be OFF (QVAC/Bare native binaries are
+unsigned). If a model download fails with "RPC initialization timed out", that's the
+cause: Windows Security → App & browser control → Smart App Control → Off, reboot,
+run the launcher again.
 
-```powershell
-.\start-viewer.cmd
+### Linux (x64)
+
+```bash
+git clone https://github.com/opastushkov/kickoff_oracle.git
+cd kickoff_oracle
+chmod +x start-host.sh start-juror.sh start-viewer.sh   # once
+./start-host.sh
+```
+
+The sidecar runs in the background and logs to `sidecar.log` in the repo root;
+**Ctrl+C stops both** the app and the sidecar. The browser opens via `xdg-open`
+(or open `http://localhost:5173` yourself). The platform-native AI runtime
+(`bare-runtime-linux-x64`) installs automatically as an optional dependency.
+
+### Manual start (any OS, including macOS)
+
+Terminal 1 — the sidecar:
+
+```bash
+cd frontend/sidecar
+npm install
+npm start                          # host / juror (runs the AI)
+# viewer instead:  QVAC_DISABLE_LLM=1 npm start
+```
+
+Terminal 2 — the app:
+
+```bash
+cd frontend
+npx pnpm@11 install
+npx pnpm@11 dev                    # then open http://localhost:5173
 ```
 
 Then in the browser: **Log in with wallet → Create a room** (host) or
